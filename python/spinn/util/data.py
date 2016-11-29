@@ -92,7 +92,7 @@ def CropAndPad(dataset, length, logger=None, sentence_pair_data=False):
     for example in dataset:
         for (transitions_key, num_transitions_key, tokens_key) in keys:
             example[num_transitions_key] = len(example[transitions_key])
-            transitions_left_padding = length - example[num_transitions_key]
+            transitions_left_padding = 0 # length - example[num_transitions_key]
             shifts_before_crop_and_pad = example[transitions_key].count(0)
             CropAndPadExample(
                 example, transitions_left_padding, length, transitions_key,
@@ -154,7 +154,7 @@ def MakeTrainingIterator(sources, batch_size, smart_batches=True, use_peano=True
         order = np.array(order)
 
         num_splits = 10 # TODO: Should we be smarter about split size?
-        order_limit = len(order) / num_splits * num_splits 
+        order_limit = len(order) / num_splits * num_splits
         order = order[:order_limit]
         order_splits = np.split(order, num_splits)
         batches = []
