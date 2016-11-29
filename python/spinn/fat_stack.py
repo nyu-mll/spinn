@@ -441,14 +441,14 @@ class Reduce(Chain):
 
 class Tracker(Chain):
 
-    def __init__(self, size, tracker_size, predict, use_tracker_dropout=True, tracker_dropout_rate=0.1):
+    def __init__(self, size, tracker_size, predict, predict_skips=True, use_tracker_dropout=True, tracker_dropout_rate=0.1):
         super(Tracker, self).__init__(
             lateral=L.Linear(tracker_size, 4 * tracker_size),
             buf=L.Linear(size, 4 * tracker_size, nobias=True),
             stack1=L.Linear(size, 4 * tracker_size, nobias=True),
             stack2=L.Linear(size, 4 * tracker_size, nobias=True))
         if predict:
-            self.add_link('transition', L.Linear(tracker_size, 3))
+            self.add_link('transition', L.Linear(tracker_size, 2 + predict_skips))
         self.state_size = tracker_size
         self.tracker_dropout_rate = tracker_dropout_rate
         self.use_tracker_dropout = use_tracker_dropout
@@ -510,6 +510,7 @@ class SPINN(Chain):
             self.add_link('tracker', Tracker(
                 args.size, args.tracker_size,
                 predict=args.transition_weight is not None,
+                predict_skips=False,
                 use_tracker_dropout=args.use_tracker_dropout,
                 tracker_dropout_rate=args.tracker_dropout_rate))
         self.transition_weight = args.transition_weight
@@ -518,6 +519,7 @@ class SPINN(Chain):
         self.use_reinforce = use_reinforce
 
     def __call__(self, example, attention=None, print_transitions=False):
+        self.tokens = example.tokens
         self.bufs = self.embed(example.tokens)
         # prepend with NULL NULL:
         # This exists specifically for the tracker.
@@ -536,13 +538,15 @@ class SPINN(Chain):
         return self.run(run_internal_parser=True)
 
     def run(self, print_transitions=False, run_internal_parser=False,
-            use_internal_parser=False):
+            use_internal_parser=True):
         # how to use:
         # encoder.bufs = bufs, unbundled
         # encoder.stacks = stacks, unbundled
         # encoder.tracker.state = trackings, unbundled
         # encoder.transitions = ExampleList of Examples, padded with n
         # encoder.run()
+
+        num_pad = [np.sum(seq == 0) for seq in self.tokens.data]
         self.history = [[] for buf in self.bufs] if self.use_history is not None \
                         else itertools.repeat(None)
 
@@ -559,43 +563,48 @@ class SPINN(Chain):
             else:
             #     transition_arr = [0]*len(self.bufs)
                 raise Exception('Running without transitions not implemented')
-            if hasattr(self, 'tracker'):
-                transition_hyp = self.tracker(self.bufs, self.stacks)
-                transition_preds = transition_hyp.data.argmax(axis=1)
-                if transition_hyp is not None and run_internal_parser:
+
+            must_notskip = np.array([self.tokens.data[i][-len(buf)] != 0 for i, buf in enumerate(self.bufs)])
+            if hasattr(self, 'tracker') and sum(must_notskip) > 0:
+                buf_noskip = [buf if must_notskip[i] else Variable(np.zeros_like(buf.data)) for i, buf in enumerate(self.bufs) ]
+                stack_noskip = [stack if must_notskip[i] else Variable(np.zeros_like(stack.data)) for i, stack in enumerate(self.stacks)]
+                transition_hyp = self.tracker(buf_noskip, stack_noskip)
+
+                if run_internal_parser:
                     transition_hyp = to_cpu(transition_hyp)
-                    if hasattr(self, 'transitions'):
-                        if self.use_reinforce:
-                            probas = F.softmax(transition_hyp)
-                            samples = np.array([np.random.choice(3, 1, p=proba)[0] for proba in probas.data])
+                    if self.use_reinforce:
+                        probas = F.softmax(transition_hyp)
+                        samples = np.array([T_SKIP for _ in self.bufs])
+                        samples[must_notskip] = np.array([np.random.choice(2, 1, p=proba)[0] for proba in probas.data[must_notskip]])
 
-                            validate_transitions = True
-                            if validate_transitions:
-                                # TODO: Almost definitely these don't work as expected because of how
-                                # things are initialized and because of the SKIP action.
+                        validate_transitions = True
+                        if validate_transitions:
+                            # TODO: Almost definitely these don't work as expected because of how
+                            # things are initialized and because of the SKIP action.
 
-                                # Cannot reduce on too small a stack
-                                must_shift = np.array([len(stack) < 2 for stack in self.stacks])
-                                samples[must_shift] = 0
+                            # Cannot reduce on too small a stack
+                            must_shift = np.array([len(stack) < 2 for stack in self.stacks])
+                            samples[np.logical_and(must_shift, must_notskip)] = T_SHIFT
 
-                                # Cannot shift if stack has to be reduced
-                                must_reduce = np.array([len(buf) >= num_transitions for buf in self.bufs])
-                                samples[must_reduce] = 1
+                            # Cannot shift if stack has to be reduced
+                            must_reduce = np.array([len(buf) >= num_transitions - num_pad[i]  for i, buf in enumerate(self.bufs)])
+                            samples[np.logical_and(must_reduce, must_notskip)] = T_REDUCE
 
-                            local_transition_acc = F.accuracy(
-                                probas, transitions)
-                            transition_acc += local_transition_acc
-                            transition_loss += F.softmax_cross_entropy(
-                                probas, samples.astype('int32'),
-                                normalize=False)
+                        transition_preds = samples
+                        transition_acc += F.accuracy(probas, transitions)
+                        transition_loss += F.softmax_cross_entropy(
+                            probas, samples.astype('int32'),
+                            normalize=False)
 
-                        else:
-                            transition_loss += F.softmax_cross_entropy(
-                                transition_hyp, transitions,
-                                normalize=False)
-                            local_transition_acc = F.accuracy(
-                                transition_hyp, transitions)
-                            transition_acc += local_transition_acc
+                    else:
+                        transition_preds = [T_SKIP for _ in range(len(self.bufs))]
+                        transition_preds[must_notskip] = transition_hyp[must_notskip].data.argmax(axis=1)
+
+                        transition_loss += F.softmax_cross_entropy(
+                            transition_hyp, transitions,
+                            normalize=False)
+                        transition_acc += F.accuracy(transition_hyp, transitions)
+
                     if use_internal_parser:
                         transition_arr = transition_preds.tolist()
 
@@ -638,6 +647,7 @@ class SPINN(Chain):
                 else:
                     if self.use_history:
                         history.append(buf[-1])  # pad history so it can be stacked/transposed
+
             if len(rights) > 0:
                 reduced = iter(self.reduce(
                     lefts, rights, trackings, attentions))
