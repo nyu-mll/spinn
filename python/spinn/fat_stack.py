@@ -574,8 +574,8 @@ class SPINN(Chain):
                     transition_hyp = to_cpu(transition_hyp)
                     if self.use_reinforce:
                         probas = F.softmax(transition_hyp)
-                        samples = np.array([T_SKIP for _ in self.bufs])
-                        samples[must_notskip] = np.array([np.random.choice(2, 1, p=proba)[0] for proba in probas.data[must_notskip]])
+                        transition_preds = np.array([T_SKIP for _ in self.bufs], dtype=np.int32)
+                        transition_preds[must_notskip] = np.array([np.random.choice(2, 1, p=proba)[0] for proba in probas.data[must_notskip]])
 
                         validate_transitions = True
                         if validate_transitions:
@@ -584,16 +584,23 @@ class SPINN(Chain):
 
                             # Cannot reduce on too small a stack
                             must_shift = np.array([len(stack) < 2 for stack in self.stacks])
-                            samples[np.logical_and(must_shift, must_notskip)] = T_SHIFT
+                            transition_preds[np.logical_and(must_shift, must_notskip)] = T_SHIFT
 
                             # Cannot shift if stack has to be reduced
                             must_reduce = np.array([len(buf) >= num_transitions - num_pad[i]  for i, buf in enumerate(self.bufs)])
-                            samples[np.logical_and(must_reduce, must_notskip)] = T_REDUCE
+                            transition_preds[np.logical_and(must_reduce, must_notskip)] = T_REDUCE
 
-                        transition_preds = samples
+
+                        must_notskip =  np.tile(np.expand_dims(must_notskip, axis=1), (1, 2))
+
                         transition_acc += F.accuracy(probas, transitions)
+
+                        # Probas are replaced by 50-50 on "SKIP" examples,
+                        # but it doesn't get backprop thru anyway because
+                        # the corresponding mask is 0 in F.where()
                         transition_loss += F.softmax_cross_entropy(
-                            probas, samples.astype('int32'),
+                            F.where(must_notskip, probas, Variable(0.5*np.ones_like(probas.data))),
+                            np.where(must_notskip[:,0], transition_preds, T_SHIFT*np.ones_like(transition_preds)),
                             normalize=False)
 
                     else:
@@ -848,4 +855,3 @@ class SentenceModel(BaseModel):
         h, transition_acc, transition_loss = super(SentenceModel, self).run_spinn(example, train)
         h = F.concat(h, axis=0)
         return h, transition_acc, transition_loss
-

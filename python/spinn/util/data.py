@@ -92,7 +92,7 @@ def CropAndPad(dataset, length, logger=None, sentence_pair_data=False):
     for example in dataset:
         for (transitions_key, num_transitions_key, tokens_key) in keys:
             example[num_transitions_key] = len(example[transitions_key])
-            transitions_left_padding = 0 # length - example[num_transitions_key]
+            transitions_left_padding = min(length - example[num_transitions_key], 0)
             shifts_before_crop_and_pad = example[transitions_key].count(0)
             CropAndPadExample(
                 example, transitions_left_padding, length, transitions_key,
@@ -276,7 +276,7 @@ def PreprocessDataset(dataset, vocabulary, seq_length, data_manager, eval_mode=F
                 dtype=np.int32), (1, 0))
     else:
         X = np.array([example["tokens"] for example in dataset],
-                     dtype=np.int32)
+                      dtype=np.int32)
         transitions = np.array([example["transitions"] for example in dataset],
                                dtype=np.int32)
         num_transitions = np.array(
