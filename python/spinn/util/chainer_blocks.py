@@ -195,6 +195,55 @@ def unbundle(state):
         state.both, state.both.data.shape[0], axis=0, force_tuple=True)
 
 
+""" Pseudocode for different RNN Units
+
+    LSTM(x, h, c):
+        f =  sigmoid(W_f.dot(x) + U_f.dot(h))
+        i =  sigmoid(W_i.dot(x) + U_i.dot(h))
+        o =  sigmoid(W_o.dot(x) + U_o.dot(h))
+        c_hat = tanh(W_c.dot(x) + U_c.dot(h))
+        new_c = f * c + i * c_hat
+        new_h = o * tanh(new_c)
+
+    TreeLSTM(x_left, x_right):
+        c_left , h_left  = split(x_left)
+        c_right, h_right = split(x_right)
+        gates = W_l.dot(h_left) + W_r.dot(h_right)
+        i_gate, fl_gate, fr_gate, o_gate, cell_inp = \
+            split(gates)
+        # Apply nonlinearities
+        i_gate   = F.sigmoid(i_gate)
+        fl_gate  = F.sigmoid(fl_gate)
+        fr_gate  = F.sigmoid(fr_gate)
+        o_gate   = F.sigmoid(o_gate)
+        cell_inp = F.tanh(cell_inp)
+        # Compute new cell and hidden value
+        i_val = i_gate * cell_inp
+        new_c = fl_gate * c_left + fr_gate * c_right + i_val
+        new_h = o_gate * F.tanh(new_c)
+        new_x = concat(new_c, new_h)
+
+    GRU(x, h):
+        r =  sigmoid(W_r.dot(x) + U_r.dot(h))
+        z =  sigmoid(W_z.dot(x) + U_z.dot(h))
+        h_hat = tanh(W_h.dot(x) + U_h.dot(r * h))
+        new_h = (1 - z) * h + z * h_hat
+
+    TreeGRU(x_left, x_right):
+        h_left  = x_left
+        h_right = x_right
+        gates = W_l.dot(h_left) + W_r.dot(h_right)
+        r_gate, zl_gate, zr_gate, h_gate = split(gates)
+        r_gate  = sigmoid(r_gate)
+        zl_gate = sigmoid(zl_gate)
+        zr_gate = sigmoid(zr_gate)
+        h_hat = tanh(h_gate + left_Uh.dot(r * h_left) + right_Uh.dot(r * h_right))
+        new_h = h_left  - zl_gate * (h_hat - h_left) + \
+                h_right - zl_gate * (h_hat - h_right)
+        new_x = new_h
+"""
+
+
 def treelstm(c_left, c_right, gates):
     hidden_dim = c_left.shape[1]
 
@@ -225,6 +274,31 @@ def treelstm(c_left, c_right, gates):
 
     return (c_t, h_t)
 
+
+def treegru(h_left, h_right, gates, U_left, U_right):
+    hidden_dim = c_left.shape[1]
+
+    assert gates.shape[1] == hidden_dim * 5, "Need to have 5 gates."
+
+    def slice_gate(gate_data, i):
+        return gate_data[:, i * hidden_dim:(i + 1) * hidden_dim]
+
+    # Compute and slice gate values
+    r, zl_gate, zr_gate, h_gate = \
+        [slice_gate(gates, i) for i in range(4)]
+
+    # Apply nonlinearities
+    r_gate = F.sigmoid(r_gate)
+    zl_gate = F.sigmoid(zl_gate)
+    zr_gate = F.sigmoid(zr_gate)
+
+    # Compute new cell and hidden value
+    h_val = F.tanh(h_gate + U_left(r * h_left) + U_right(r * h_right))
+    # TODO: Add dropout
+    h_t = h_left  - zl_gate * (h_val - h_left) + \
+          h_right - zl_gate * (h_val - h_right)
+
+    return h_t
 
 
 class CrossEntropyClassifier(Chain):
