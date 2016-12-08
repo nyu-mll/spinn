@@ -317,16 +317,14 @@ class BaseSentencePairTrainer(object):
     def update(self):
         self.optimizer.update()
 
-    def forward(self, x_batch, y_batch=None, train=True, predict=False,
-                use_internal_parser=False, validate_transitions=True, use_random=False):
+    def forward(self, run_args, x_batch, y_batch=None, train=True, predict=False):
         assert "sentences" in x_batch and "transitions" in x_batch, \
             "Input must contain dictionary of sentences and transitions."
 
         sentences = x_batch["sentences"]
         transitions = x_batch["transitions"]
 
-        ret = self.model(sentences, transitions, y_batch, train=train,
-            use_internal_parser=use_internal_parser, validate_transitions=validate_transitions, use_random=use_random)
+        ret = self.model(run_args, sentences, transitions, y_batch, train=train)
         y = ret[0]
         if predict:
             preds = self.__mod.argmax(y.data, 1).tolist()
@@ -360,7 +358,7 @@ class Embed(Chain):
             ~chainer.links.BatchNormalization).
     """
 
-    def __init__(self, size, vocab_size, dropout, vectors, normalization=None,
+    def __init__(self, size, vocab_size, dropout, vectors,
                  make_buffers=True, activation=None,
                  use_input_dropout=False, use_input_norm=False):
         size = 2 * size if make_buffers else size
@@ -369,7 +367,7 @@ class Embed(Chain):
         else:
             super(Embed, self).__init__(projection=L.Linear(vectors.shape[1], size))
         if use_input_norm:
-            self.add_link('normalization', normalization(size))
+            self.add_link('normalization', L.BatchNormalization(size))
         self.vectors = vectors
         self.dropout = dropout
         self.make_buffers = make_buffers
