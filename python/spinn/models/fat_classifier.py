@@ -182,7 +182,23 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
     return acc_accum / eval_batches
 
 
-def reinforce(optimizer, lr, baseline, mu, reward, transition_loss):
+def reinforce(optimizer, lr, baseline, mu, reward, memories):
+    statistics = zip(*[
+        (m["hyp_acc"], m["truth_acc"], m["hyp_xent"], m["truth_xent"])
+        for m in memories])
+
+    statistics = [
+        F.squeeze(F.concat([F.expand_dims(ss, 1) for ss in s], axis=0))
+        if isinstance(s[0], Variable) else
+        np.array(reduce(lambda x, y: x + y.tolist(), s, []))
+        for s in statistics]
+
+    hyp_acc, truth_acc, hyp_xent, truth_xent = statistics
+
+    transition_loss = F.softmax_cross_entropy(
+                hyp_xent, truth_xent.astype(np.int32),
+                normalize=False) * reward
+
     new_lr = (lr*(reward - baseline))
     baseline = baseline*(1-mu)+mu*reward
 
@@ -436,7 +452,7 @@ def run(only_forward=False):
 
             if FLAGS.use_reinforce:
                 transition_optimizer.zero_grads()
-                optimizer_lr, baseline = reinforce(transition_optimizer, optimizer_lr, baseline, mu, rewards, transition_loss)
+                optimizer_lr, baseline = reinforce(transition_optimizer, optimizer_lr, baseline, mu, rewards, model.spinn.memories)
 
             # Accumulate accuracy for current interval.
             acc_val = float(classifier_trainer.model.accuracy.data)
