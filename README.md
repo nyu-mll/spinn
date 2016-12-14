@@ -17,8 +17,6 @@ Requirements:
 
 - Python 2.7
 - Chainer 1.17
-- CUDA >= 7.0
-- CuDNN == v4 (v5 is not compatible with our Theano fork)
 
 Install all required Python dependencies using the command below.
 
@@ -34,8 +32,8 @@ Here's a sample command that runs a fast, low-dimensional CPU training run, trai
         python2.7 -m spinn.models.fat_classifier --data_type snli \
         --training_data_path snli_1.0/snli_1.0_dev.jsonl \
         --eval_data_path snli_1.0/snli_1.0_dev.jsonl \
-        --embedding_data_path spinn/python/spinn/tests/test_embedding_matrix.5d.txt \
-        --word_embedding_dim 5 --model_dim 10
+        --embedding_data_path spinn/tests/test_embedding_matrix.5d.txt \
+        --word_embedding_dim 5 --model_dim 10 --model_type CBOW
 
 For full runs, you'll also need a copy of the 840B word 300D [GloVe word vectors](http://nlp.stanford.edu/projects/glove/).
 
@@ -47,9 +45,9 @@ To view some statistics in Tensorboard, make sure to turn the "write_summary" fl
         python2.7 -m spinn.models.fat_classifier --data_type snli \
         --training_data_path snli_1.0/snli_1.0_dev.jsonl \
         --eval_data_path snli_1.0/snli_1.0_dev.jsonl \
-        --embedding_data_path spinn/python/spinn/tests/test_embedding_matrix.5d.txt \
+        --embedding_data_path spinn/tests/test_embedding_matrix.5d.txt \
         --word_embedding_dim 5 --model_dim 10 \
-        --write_summaries True
+        --write_summaries True --model_type CBOW
 
 You'll also need to install [Tensorflow](http://tflearn.org/installation/#tensorflow-installation).
 
