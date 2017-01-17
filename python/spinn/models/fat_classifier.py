@@ -336,7 +336,34 @@ def run(only_forward=False):
         accum_preds = deque(maxlen=FLAGS.deq_length)
         accum_truth = deque(maxlen=FLAGS.deq_length)
         printed_total_weights = False
+        training_data_size = training_data[0].shape[0]
+        steps_per_epoch = training_data_size / FLAGS.batch_size
         for step in range(step, FLAGS.training_steps):
+            epoch_step = step % steps_per_epoch
+            epoch = step / steps_per_epoch
+
+            if FLAGS.eval_periodic_epoch:
+                run_eval = (epoch_step == 0)
+            else:
+                run_eval = (step % FLAGS.ckpt_interval_steps == 0 or step % FLAGS.eval_interval_steps == 0)
+
+            if run_eval:
+                if step % FLAGS.ckpt_interval_steps == 0:
+                    dev_error_threshold = best_dev_error
+                else:
+                    dev_error_threshold = 0.99 * best_dev_error
+
+                for index, eval_set in enumerate(eval_iterators):
+                    acc = evaluate(classifier_trainer, eval_set, logger, step, vocabulary=vocabulary if FLAGS.print_tree else None,
+                        eval_data_limit=FLAGS.eval_data_limit, use_internal_parser=FLAGS.use_internal_parser)
+                    if FLAGS.ckpt_on_best_dev_error and index == 0 and (1 - acc) < dev_error_threshold and step > FLAGS.ckpt_step:
+                        best_dev_error = 1 - acc
+                        logger.Log("Checkpointing with new best dev accuracy of %f" % acc)
+                        classifier_trainer.save(checkpoint_path, step, best_dev_error)
+                    if FLAGS.write_summaries:
+                        dev_summary_logger.log(step=step, loss=0.0, accuracy=acc)
+                progress_bar.reset()
+
             X_batch, transitions_batch, y_batch, _ = training_data_iter.next()
 
             # Reset cached gradients.
@@ -408,11 +435,19 @@ def run(only_forward=False):
             if FLAGS.write_summaries:
                 train_summary_logger.log(step=step, loss=total_cost_val, accuracy=acc_val)
 
-            progress_bar.step(
-                i=max(0, step-1) % FLAGS.statistics_interval_steps + 1,
-                total=FLAGS.statistics_interval_steps)
+            if FLAGS.eval_periodic_epoch:
+                progress_bar.step(i=epoch_step, total=steps_per_epoch)
+            else:
+                progress_bar.step(
+                    i=max(0, step-1) % FLAGS.statistics_interval_steps + 1,
+                    total=FLAGS.statistics_interval_steps)
 
-            if step % FLAGS.statistics_interval_steps == 0:
+            if FLAGS.eval_periodic_epoch:
+                run_statistics = (epoch_step == steps_per_epoch - 1)
+            else:
+                run_statistics = step % FLAGS.statistics_interval_steps == 0
+
+            if run_statistics:
                 progress_bar.finish()
                 avg_class_acc = np.array(accum_class_acc).mean()
                 all_preds = flatten(accum_preds)
@@ -421,9 +456,14 @@ def run(only_forward=False):
                     avg_trans_acc = metrics.accuracy_score(all_preds, all_truth) if len(all_preds) > 0 else 0.0
                 else:
                     avg_trans_acc = 0.0
-                logger.Log(
-                    "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f"
-                    % (step, avg_class_acc, avg_trans_acc, total_cost_val, xent_loss.data, transition_cost_val, l2_loss.data))
+                if FLAGS.eval_periodic_epoch:
+                    logger.Log(
+                        "Epoch: %i\tStep: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f"
+                        % (epoch, step, avg_class_acc, avg_trans_acc, total_cost_val, xent_loss.data, transition_cost_val, l2_loss.data))
+                else:
+                    logger.Log(
+                        "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f"
+                        % (step, avg_class_acc, avg_trans_acc, total_cost_val, xent_loss.data, transition_cost_val, l2_loss.data))
                 if FLAGS.transitions_confusion_matrix:
                     cm = metrics.confusion_matrix(
                         np.array(all_preds),
@@ -445,24 +485,6 @@ def run(only_forward=False):
                 accum_class_acc.clear()
                 accum_preds.clear()
                 accum_truth.clear()
-
-            if step > 0 and (step % FLAGS.ckpt_interval_steps == 0 or step % FLAGS.eval_interval_steps == 0):
-                if step % FLAGS.ckpt_interval_steps == 0:
-                    dev_error_threshold = best_dev_error
-                else:
-                    dev_error_threshold = 0.99 * best_dev_error
-
-                for index, eval_set in enumerate(eval_iterators):
-                    acc = evaluate(classifier_trainer, eval_set, logger, step, vocabulary=vocabulary if FLAGS.print_tree else None,
-                        eval_data_limit=FLAGS.eval_data_limit, use_internal_parser=FLAGS.use_internal_parser)
-                    if FLAGS.ckpt_on_best_dev_error and index == 0 and (1 - acc) < dev_error_threshold and step > FLAGS.ckpt_step:
-                        best_dev_error = 1 - acc
-                        logger.Log("Checkpointing with new best dev accuracy of %f" % acc)
-                        classifier_trainer.save(checkpoint_path, step, best_dev_error)
-                    if FLAGS.write_summaries:
-                        dev_summary_logger.log(step=step, loss=0.0, accuracy=acc)
-                progress_bar.reset()
-
 
             if FLAGS.profile and step >= FLAGS.profile_steps:
                 break
@@ -570,9 +592,9 @@ if __name__ == '__main__':
     gflags.DEFINE_float("transition_cost_scale", 1.0, "Multiplied by the transition cost.")
 
     # Display settings.
-    gflags.DEFINE_integer("statistics_interval_steps", 100, "Print training set results at this interval.")
+    gflags.DEFINE_boolean("eval_periodic_epoch", False, "Run eval once per epoch.")
     gflags.DEFINE_integer("eval_interval_steps", 100, "Evaluate at this interval.")
-
+    gflags.DEFINE_integer("statistics_interval_steps", 100, "Print training set results at this interval.")
     gflags.DEFINE_integer("ckpt_interval_steps", 5000, "Update the checkpoint on disk at this interval.")
     gflags.DEFINE_boolean("ckpt_on_best_dev_error", True, "If error on the first eval set (the dev set) is "
         "at most 0.99 of error at the previous checkpoint, save a special 'best' checkpoint.")
