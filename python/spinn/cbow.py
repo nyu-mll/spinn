@@ -66,9 +66,9 @@ class BaseModel(nn.Module):
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else word_embedding_dim
         
-        self.l0 = nn.Linear(mlp_input_dim, model_dim)
-        self.l1 = nn.Linear(model_dim, model_dim)
-        self.l2 = nn.Linear(model_dim, num_classes)
+        self.l0 = nn.Linear(mlp_input_dim, mlp_dim)
+        self.l1 = nn.Linear(mlp_dim, mlp_dim)
+        self.l2 = nn.Linear(mlp_dim, num_classes)
 
         self.init_params()
 
