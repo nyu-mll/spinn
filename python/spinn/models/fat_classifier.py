@@ -40,7 +40,6 @@ FLAGS = gflags.FLAGS
 avg_train_time = deque(maxlen=5)
 avg_eval_time = deque(maxlen=5)
 
-
 def flatten(l):
     if hasattr(l, '__len__'):
         return reduce(lambda x, y: x + flatten(y), l, [])
