@@ -125,13 +125,6 @@ def gradient_check(model, get_loss, rtol=0, atol=1e-2, to_check=10):
     testing.assert_allclose(estimates, grads, rtol=rtol, atol=atol, verbose=True), "Gradient check failed."
 
 
-def flatten(l):
-    if hasattr(l, '__len__'):
-        return reduce(lambda x, y: x + flatten(y), l, [])
-    else:
-        return [l]
-
-
 def the_gpu():
     return the_gpu.gpu
 

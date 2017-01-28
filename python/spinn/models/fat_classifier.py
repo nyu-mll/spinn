@@ -23,16 +23,13 @@ from spinn.data.boolean import load_boolean_data
 from spinn.data.sst import load_sst_data
 from spinn.data.snli import load_snli_data
 from spinn.util.data import SimpleProgressBar
-from spinn.util.chainer_blocks import gradient_check, flatten
 
 import spinn.fat_stack
 import spinn.plain_rnn
 import spinn.cbow
 import spinn.nti
 
-# Try to avoid chainer imports as much as possible.
-from chainer import optimizers
-import chainer.functions as F
+import torch
 
 from spinn.util.data import print_tree
 from sklearn import metrics
@@ -42,6 +39,13 @@ FLAGS = gflags.FLAGS
 
 avg_train_time = deque(maxlen=5)
 avg_eval_time = deque(maxlen=5)
+
+
+def flatten(l):
+    if hasattr(l, '__len__'):
+        return reduce(lambda x, y: x + flatten(y), l, [])
+    else:
+        return [l]
 
 
 def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_dim,
@@ -404,12 +408,12 @@ def run(only_forward=False):
                 accum_new_rew.append(model.avg_new_rew)
                 accum_baseline.append(model.avg_baseline)
 
-            # if not printed_total_weights:
-            #     printed_total_weights = True
-            #     def prod(l):
-            #         return reduce(lambda x, y: x * y, l, 1.0)
-            #     total_weights = sum([prod(w.shape) for w in model.params()])
-            #     logger.Log("Total Weights: {}".format(total_weights))
+            if not printed_total_weights:
+                printed_total_weights = True
+                def prod(l):
+                    return reduce(lambda x, y: x * y, l, 1.0)
+                total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])
+                logger.Log("Total Weights: {}".format(total_weights))
 
             if transition_loss is not None:
                 preds = [m["preds_cm"] for m in model.spinn.memories]
