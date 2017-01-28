@@ -3,6 +3,7 @@ import os
 import pprint
 import sys
 import time
+import math
 from collections import deque
 
 # Chainer Type Check is a major bottleneck for small networks,
@@ -97,7 +98,7 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
             ret = classifier_trainer.forward({
                 "sentences": eval_X_batch,
                 "transitions": eval_transitions_batch,
-                }, eval_y_batch, train=False, predict=False,
+                }, eval_y_batch, train=False,
                 use_internal_parser=use_internal_parser,
                 use_reinforce=False,
                 validate_transitions=FLAGS.validate_transitions,
@@ -343,7 +344,7 @@ def run(only_forward=False):
         l2_lambda=FLAGS.l2_lambda,
         )
 
-    model = classifier_trainer.optimizer.target
+    model = classifier_trainer.model
 
     # Do an evaluation-only run.
     if only_forward:
@@ -378,13 +379,13 @@ def run(only_forward=False):
             X_batch, transitions_batch, y_batch, _ = training_data_iter.next()
 
             # Reset cached gradients.
-            classifier_trainer.optimizer.zero_grads()
+            classifier_trainer.reset()
 
             # Calculate loss and update parameters.
             ret = classifier_trainer.forward({
                 "sentences": X_batch,
                 "transitions": transitions_batch,
-                }, y_batch, train=True, predict=False,
+                }, y_batch, train=True,
                     validate_transitions=FLAGS.validate_transitions,
                     use_internal_parser=FLAGS.use_internal_parser,
                     use_reinforce=FLAGS.use_reinforce,
@@ -395,7 +396,7 @@ def run(only_forward=False):
 
             xent_loss *= FLAGS.y_lambda
 
-            accum_class_preds.append(y.data.argmax(axis=1))
+            accum_class_preds.append(y.data.max(1)[1])
             accum_class_truth.append(y_batch)
 
             if FLAGS.use_reinforce:
@@ -403,12 +404,12 @@ def run(only_forward=False):
                 accum_new_rew.append(model.avg_new_rew)
                 accum_baseline.append(model.avg_baseline)
 
-            if not printed_total_weights:
-                printed_total_weights = True
-                def prod(l):
-                    return reduce(lambda x, y: x * y, l, 1.0)
-                total_weights = sum([prod(w.shape) for w in model.params()])
-                logger.Log("Total Weights: {}".format(total_weights))
+            # if not printed_total_weights:
+            #     printed_total_weights = True
+            #     def prod(l):
+            #         return reduce(lambda x, y: x * y, l, 1.0)
+            #     total_weights = sum([prod(w.shape) for w in model.params()])
+            #     logger.Log("Total Weights: {}".format(total_weights))
 
             if transition_loss is not None:
                 preds = [m["preds_cm"] for m in model.spinn.memories]
@@ -449,22 +450,12 @@ def run(only_forward=False):
             # Apply gradients
             classifier_trainer.update()
 
-            if FLAGS.use_lr_decay:
-                try:
-                    # Update Learning Rate
-                    learning_rate = FLAGS.learning_rate * (FLAGS.learning_rate_decay_per_10k_steps ** (step / 10000.0))
-                    classifier_trainer.optimizer.lr = learning_rate
-                except AttributeError:
-                    # Some optimizers (like Adam) do not allow you to set learning rate this way.
-                    # Fortunately, they tend to have some sort of built-in decay.
-                    pass
-
             end = time.time()
             avg_time = (end - start) / float(y_batch.shape[0])
             avg_train_time.append(avg_time)
 
             # Accumulate accuracy for current interval.
-            acc_val = float(classifier_trainer.model.accuracy.data)
+            acc_val = class_acc
 
             if FLAGS.write_summaries:
                 train_summary_logger.log(step=step, loss=total_cost_val, accuracy=acc_val)
