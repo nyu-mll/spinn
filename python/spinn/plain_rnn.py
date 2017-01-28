@@ -5,56 +5,29 @@ import itertools
 import numpy as np
 from spinn import util
 
-# Chainer imports
-import chainer
-from chainer import reporter, initializers
-from chainer import cuda, Function, gradient_check, report, training, utils, Variable
-from chainer import datasets, iterators, optimizers, serializers
-from chainer import Link, Chain, ChainList
-import chainer.functions as F
-from chainer.functions.connection import embed_id
-from chainer.functions.normalization.batch_normalization import batch_normalization
-from chainer.functions.evaluation import accuracy
-import chainer.links as L
-from chainer.training import extensions
-
-from chainer.functions.activation import slstm
-from chainer.utils import type_check
-
-from spinn.util.chainer_blocks import BaseSentencePairTrainer, Reduce
-from spinn.util.chainer_blocks import LSTMState, Embed, LSTMChain
-from spinn.util.chainer_blocks import CrossEntropyClassifier
-from spinn.util.chainer_blocks import bundle, unbundle, the_gpu, to_cpu, to_gpu, treelstm
+# PyTorch
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+import torch.nn.functional as F
+import torch.optim as optim
 
 
-def HeKaimingInit(shape, real_shape=None):
-    # Calculate fan-in / fan-out using real shape if given as override
-    fan = real_shape or shape
-
-    return np.random.normal(scale=np.sqrt(4.0/(fan[0] + fan[1])),
-                            size=shape)
+from spinn.util.pytorch_blocks import BaseSentencePairTrainer, HeKaimingInit
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
-    def init_params(self, **kwargs):
-        for name, param in self.model.namedparams():
-            data = param.data
-            print("Init: {}:{}".format(name, data.shape))
-            if len(data.shape) >= 2:
-                data[:] = HeKaimingInit(data.shape)
-            else:
-                data[:] = np.random.uniform(-0.1, 0.1, data.shape)
 
-    def init_optimizer(self, lr=0.01, **kwargs):
-        self.optimizer = optimizers.Adam(alpha=lr, beta1=0.9, beta2=0.999, eps=1e-08)
-        self.optimizer.setup(self.model)
+    def init_optimizer(self, lr=0.01, l2_lambda=0.0, **kwargs):
+        relevant_params = [w for w in self.model.parameters() if w.requires_grad]
+        self.optimizer = optim.Adam(relevant_params, lr=lr, betas=(0.9, 0.999), weight_decay=l2_lambda)
 
 
 class SentenceTrainer(SentencePairTrainer):
     pass
 
 
-class BaseModel(Chain):
+class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
                  input_keep_rate, classifier_keep_rate,
@@ -79,33 +52,65 @@ class BaseModel(Chain):
                 ):
         super(BaseModel, self).__init__()
 
-        the_gpu.gpu = gpu
+        self.model_dim = model_dim
 
+        if initial_embeddings is not None:
+            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+            self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
+            self._embed.weight.requires_grad = False
+        else:
+            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+            self._embed.weight.requires_grad = True
+
+        # CBOW doesn't use model_dim right now. Let's leave this message here anyway for now, since
+        # word_embedding_dim is effectively the model_dim.
         assert word_embedding_dim == model_dim, "Currently only supports word_embedding_dim == model_dim"
 
-        mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else word_embedding_dim
-        self.add_link('l0', L.Linear(mlp_input_dim, mlp_dim))
-        self.add_link('l1', L.Linear(mlp_dim, mlp_dim))
-        self.add_link('l2', L.Linear(mlp_dim, num_classes))
+        self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1)
 
-        self.classifier = CrossEntropyClassifier(gpu)
-        self.__gpu = gpu
-        self.accFun = accuracy.accuracy
-        self.initial_embeddings = initial_embeddings
+        mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else model_dim
+        
+        self.l0 = nn.Linear(mlp_input_dim, mlp_dim)
+        self.l1 = nn.Linear(mlp_dim, mlp_dim)
+        self.l2 = nn.Linear(mlp_dim, num_classes)
 
-        vocab_size = initial_embeddings.shape[0] if initial_embeddings is not None else vocab_size
-        self.fix_embed = initial_embeddings is not None
+        self.init_params()
+        print(self)
 
-        if initial_embeddings is None:
-            self.add_link('_embed', L.EmbedID(vocab_size, word_embedding_dim))
 
-        self.add_link('fwd_rnn', LSTMChain(input_dim=word_embedding_dim, hidden_dim=model_dim, seq_length=seq_length))
+    def init_params(self):
+        initrange = 0.1
+        for w in self.parameters():
+            if w.requires_grad:
+                print(w.size())
+                if len(w.size()) >= 2:
+                    w.data.set_(torch.from_numpy(HeKaimingInit(w.data.size())).float())
+                else:
+                    w.data.uniform_(-initrange, initrange)
 
     def embed(self, x, train):
-        if self.fix_embed:
-            return Variable(self.initial_embeddings.take(x.data, axis=0), volatile=not train)
-        else:
-            return self._embed(x)
+        return self._embed(x)
+
+    def run_rnn(self, x):
+        batch_size, seq_len, model_dim = x.data.size()
+
+        num_layers = 1
+        bidirectional = False
+        bi = 2 if bidirectional else 1
+        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim))
+        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim))
+
+        # Transforms x
+        #   from  => batch_size x seq_len x model_dim
+        #   to    => seq_len x batch_size x model_dim
+        x = torch.transpose(x, 0, 1)
+
+        # Expects (input, h_0):
+        #   input => seq_len x batch_size x model_dim
+        #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
+        output, (hn, cn) = self.rnn(x, (h0, c0))
+
+        return hn
 
     def run_mlp(self, h, train):
         h = self.l0(h)
@@ -113,13 +118,15 @@ class BaseModel(Chain):
         h = self.l1(h)
         h = F.relu(h)
         h = self.l2(h)
-        y = h
-        return h
+        y = F.log_softmax(h)
+        return y
 
 
 class SentencePairModel(BaseModel):
     def __call__(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        batch_size = sentences.shape[0]
+        raise NotImplementedError()
+
+        batch_size = sentences.size(0)
 
         # Build Tokens
         x_prem = Variable(sentences[:,:,0], volatile=not train)
@@ -140,28 +147,31 @@ class SentencePairModel(BaseModel):
             accum_loss = 0.0
             acc = 0.0
 
-        return y, accum_loss, self.accuracy.data, 0.0, None, None
+        return y, accum_loss, acc, 0.0, None, None
 
 
 class SentenceModel(BaseModel):
     def __call__(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        batch_size = sentences.shape[0]
+        batch_size, seq_length = sentences.size()
 
         # Build Tokens
         x = Variable(sentences, volatile=not train)
 
-        embeds = self.embed(x, train)
+        emb = self.embed(x, train)
+        h = self.run_rnn(emb)
+        h = torch.squeeze(h)
+        logits = self.run_mlp(h, train)
 
         _, h, _ = self.fwd_rnn(embeds, train, keep_hs=False)
         y = self.run_mlp(h, train)
 
         # Calculate Loss & Accuracy.
         if y_batch is not None:
-            accum_loss = self.classifier(y, Variable(y_batch, volatile=not train), train)
-            self.accuracy = self.accFun(y, self.xp.array(y_batch))
-            acc = self.accuracy.data
+            loss = F.nll_loss(logits, Variable(y_batch))
+            pred = logits.data.max(1)[1] # get the index of the max log-probability
+            acc = pred.eq(Variable(y_batch).data).sum() / float(y_batch.size(0))
         else:
             accum_loss = 0.0
             acc = 0.0
 
-        return y, accum_loss, self.accuracy.data, 0.0, None, None
+        return logits, loss, acc, 0.0, None, None
