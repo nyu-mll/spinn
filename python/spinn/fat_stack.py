@@ -319,8 +319,9 @@ class SPINN(nn.Module):
                         if len(stack) > 0:
                             lr.append(stack.pop())
                         else:
-                            zeros = Variable(np.zeros(buf[0].shape,
-                                dtype=buf[0].data.dtype),
+                            # TODO: This only happens in SNLI eval for some reason...
+                            zeros = Variable(torch.from_numpy(np.zeros(buf[0].size(),
+                                dtype=np.float32)),
                                 volatile=not train)
                             lr.append(zeros)
                     trackings.append(tracking)
@@ -747,23 +748,23 @@ class BaseModel(nn.Module):
 
 class SentencePairModel(BaseModel):
     def build_example(self, sentences, transitions, train):
-        batch_size = sentences.shape[0]
+        batch_size = sentences.size(0)
 
         # Build Tokens
-        x_prem = sentences[:,:,0]
-        x_hyp = sentences[:,:,1]
-        x = np.concatenate([x_prem, x_hyp], axis=0)
+        x_prem = Variable(sentences[:,:,0], volatile=not train)
+        x_hyp = Variable(sentences[:,:,1], volatile=not train)
+        x = torch.cat([x_prem, x_hyp], 0)
 
         # Build Transitions
         t_prem = transitions[:,:,0]
         t_hyp = transitions[:,:,1]
         t = np.concatenate([t_prem, t_hyp], axis=0)
 
-        assert batch_size * 2 == x.shape[0]
+        assert batch_size * 2 == x.size(0)
         assert batch_size * 2 == t.shape[0]
 
         example = {
-            'tokens': Variable(x, volatile=not train),
+            'tokens': x,
             'transitions': t
         }
         example = argparse.Namespace(**example)
