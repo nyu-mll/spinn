@@ -349,6 +349,11 @@ def run(only_forward=False):
 
     model = classifier_trainer.model
 
+    def prod(l):
+        return reduce(lambda x, y: x * y, l, 1.0)
+    total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])
+    logger.Log("Total Weights: {}".format(total_weights))
+
     # Do an evaluation-only run.
     if only_forward:
         for index, eval_set in enumerate(eval_iterators):
@@ -406,13 +411,6 @@ def run(only_forward=False):
                 accum_reward.append(model.avg_reward)
                 accum_new_rew.append(model.avg_new_rew)
                 accum_baseline.append(model.avg_baseline)
-
-            if not printed_total_weights:
-                printed_total_weights = True
-                def prod(l):
-                    return reduce(lambda x, y: x * y, l, 1.0)
-                total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])
-                logger.Log("Total Weights: {}".format(total_weights))
 
             if transition_loss is not None:
                 preds = [m["preds_cm"] for m in model.spinn.memories]

@@ -5,28 +5,19 @@ import itertools
 import numpy as np
 from spinn import util
 
-# Chainer imports
-import chainer
-from chainer import reporter, initializers
-from chainer import cuda, Function, gradient_check, report, training, utils, Variable
-from chainer import datasets, iterators, optimizers, serializers
-from chainer import Link, Chain, ChainList
-import chainer.functions as F
-from chainer.functions.connection import embed_id
-from chainer.functions.evaluation import accuracy
-import chainer.links as L
-from chainer.training import extensions
+# PyTorch
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+import torch.nn.functional as F
+import torch.optim as optim
 
-from chainer.functions.activation import slstm
-from chainer.utils import type_check
-from spinn.util.batch_softmax_cross_entropy import batch_weighted_softmax_cross_entropy
+from spinn.util.blocks import LSTMState, Reduce, LSTMChain
+from spinn.util.blocks import bundle, unbundle
+from spinn.util.blocks import treelstm, expand_along, dropout
+from spinn.util.blocks import var_mean
+from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
-from spinn.util.chainer_blocks import BaseSentencePairTrainer, HardGradientClipping, L2WeightDecay
-from spinn.util.chainer_blocks import LSTMState, Embed, Reduce, LSTMChain
-from spinn.util.chainer_blocks import CrossEntropyClassifier
-from spinn.util.chainer_blocks import bundle, unbundle, the_gpu, to_cpu, to_gpu
-from spinn.util.chainer_blocks import treelstm, expand_along, dropout
-from spinn.util.chainer_blocks import var_mean
 from sklearn import metrics
 
 import spinn.cbow
@@ -35,14 +26,6 @@ import spinn.cbow
 T_SHIFT  = 0
 T_REDUCE = 1
 T_SKIP   = 2
-
-
-def HeKaimingInit(shape, real_shape=None):
-    # Calculate fan-in / fan-out using real shape if given as override
-    fan = real_shape or shape
-
-    return np.random.normal(scale=np.sqrt(4.0/(fan[0] + fan[1])),
-                            size=shape)
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
@@ -55,33 +38,25 @@ class SentencePairTrainer(BaseSentencePairTrainer):
             else:
                 data[:] = np.random.uniform(-0.1, 0.1, data.shape)
 
-    def init_optimizer(self, lr=0.001, clip=5.0, l2_lambda=2e-5, **kwargs):
-        if kwargs["opt"] == "RMSProp":
-            self.optimizer = optimizers.RMSprop(lr=lr, alpha=0.9, eps=1e-06)
-        elif kwargs["opt"] == "Adam":
-            self.optimizer = optimizers.Adam(alpha=lr, beta1=0.9, beta2=0.999, eps=1e-08)
-        else:
-            raise Exception("Not implemented.")
-        self.optimizer.setup(self.model)
-        self.optimizer.add_hook(HardGradientClipping(-clip, clip))
-        if l2_lambda > 0.0:
-            self.optimizer.add_hook(L2WeightDecay(l2_lambda))
+    def init_optimizer(self, lr=0.01, l2_lambda=0.0, **kwargs):
+        relevant_params = [w for w in self.model.parameters() if w.requires_grad]
+        self.optimizer = optim.Adam(relevant_params, lr=lr, betas=(0.9, 0.999), weight_decay=l2_lambda)
 
 
 class SentenceTrainer(SentencePairTrainer):
     pass
 
 
-class Tracker(Chain):
+class Tracker(nn.Module):
 
     def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False):
-        super(Tracker, self).__init__(
-            lateral=L.Linear(tracker_size, 4 * tracker_size),
-            buf=L.Linear(size, 4 * tracker_size, nobias=True),
-            stack1=L.Linear(size, 4 * tracker_size, nobias=True),
-            stack2=L.Linear(size, 4 * tracker_size, nobias=True))
+        super(Tracker, self).__init__()
+        self.lateral = nn.Linear(tracker_size, 4 * tracker_size)
+        self.buf = nn.Linear(size, 4 * tracker_size, bias=False)
+        self.stack1 = nn.Linear(size, 4 * tracker_size, bias=False)
+        self.stack2 = nn.Linear(size, 4 * tracker_size, bias=False)
         if predict:
-            self.add_link('transition', L.Linear(tracker_size, 3 if use_skips else 2))
+            self.transition = nn.Linear(tracker_size, 3 if use_skips else 2)
         self.state_size = tracker_size
         self.tracker_dropout_rate = tracker_dropout_rate
         self.reset_state()
@@ -126,16 +101,16 @@ class Tracker(Chain):
             self.c, self.h = state.c, state.h
 
 
-class SPINN(Chain):
+class SPINN(nn.Module):
 
-    def __init__(self, args, vocab, normalization=L.BatchNormalization, use_skips=False):
-        super(SPINN, self).__init__(
-            reduce=Reduce(args.size, args.tracker_size, use_tracking_in_composition=args.use_tracking_in_composition))
+    def __init__(self, args, vocab, use_skips=False):
+        super(SPINN, self).__init__()
+        self.reduce = Reduce(args.size, args.tracker_size, use_tracking_in_composition=args.use_tracking_in_composition)
         if args.tracker_size is not None:
-            self.add_link('tracker', Tracker(
+            self.tracker = Tracker(
                 args.size, args.tracker_size,
                 predict=args.transition_weight is not None,
-                tracker_dropout_rate=args.tracker_dropout_rate, use_skips=use_skips))
+                tracker_dropout_rate=args.tracker_dropout_rate, use_skips=use_skips)
         self.transition_weight = args.transition_weight
         self.use_skips = use_skips
         choices = [T_SHIFT, T_REDUCE, T_SKIP] if use_skips else [T_SHIFT, T_REDUCE]
@@ -324,7 +299,7 @@ class SPINN(Chain):
         return hyp_acc, truth_acc, hyp_xent, truth_xent
 
 
-class BaseModel(Chain):
+class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
                  input_keep_rate, classifier_keep_rate,
@@ -350,8 +325,6 @@ class BaseModel(Chain):
                 ):
         super(BaseModel, self).__init__()
 
-        the_gpu.gpu = gpu
-
         self.model_dim = model_dim
         self.stack_hidden_dim = model_dim / 2
         mlp_input_dim = self.stack_hidden_dim * 2 if use_sentence_pair else self.stack_hidden_dim
@@ -371,7 +344,7 @@ class BaseModel(Chain):
         # RL Params
         self.reinforce_lr = 0.01
         self.mu = 0.1
-        self.add_persistent('baseline', 0)
+        self.baseline = 0
 
         if rl_baseline == "policy":
             baseline_model_module = spinn.cbow
@@ -411,10 +384,8 @@ class BaseModel(Chain):
              use_product_feature=use_product_feature,
             ))
 
-        self.classifier = CrossEntropyClassifier(gpu)
         self.__gpu = gpu
         self.__mod = cuda.cupy if gpu >= 0 else np
-        self.accFun = accuracy.accuracy
         self.initial_embeddings = initial_embeddings
         self.classifier_dropout_rate = 1. - classifier_keep_rate
         self.word_embedding_dim = word_embedding_dim
@@ -441,19 +412,33 @@ class BaseModel(Chain):
         }
         vocab = argparse.Namespace(**vocab)
 
-        self.add_link('embed',
-                    Embed(args.size, vocab.size, args.input_dropout_rate,
-                        vectors=vocab.vectors, normalization=L.BatchNormalization,
-                        use_input_norm=args.use_input_norm,
-                        ))
+        if initial_embeddings is not None:
+            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+            self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
+            self._embed.weight.requires_grad = False
+        else:
+            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+            self._embed.weight.requires_grad = True
 
-        self.add_link('spinn', SPINN(args, vocab, normalization=L.BatchNormalization, use_skips=use_skips))
+        self.spinn = SPINN(args, vocab, use_skips=use_skips)
 
+        # TODO: Add encoding layer.
         if self.use_encode:
-            # TODO: Could probably have a buffer that is [concat(embed, fwd, bwd)] rather
-            # than just [concat(fwd, bwd)]. More generally, [concat(embed, activation(embed))].
-            self.add_link('fwd_rnn', LSTMChain(input_dim=args.size * 2, hidden_dim=model_dim/2, seq_length=seq_length))
-            self.add_link('bwd_rnn', LSTMChain(input_dim=args.size * 2, hidden_dim=model_dim/2, seq_length=seq_length))
+            raise NotImplementedError()
+
+        self.init_params()
+        print(self)
+
+
+    def init_params(self):
+        initrange = 0.1
+        for w in self.parameters():
+            if w.requires_grad:
+                print(w.size())
+                if len(w.size()) >= 2:
+                    w.data.set_(torch.from_numpy(HeKaimingInit(w.data.size())).float())
+                else:
+                    w.data.uniform_(-initrange, initrange)
 
 
     def init_mlp(self, mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn):
@@ -463,11 +448,12 @@ class BaseModel(Chain):
         if self.use_product_feature:
             features_dim += self.stack_hidden_dim
         for i in range(num_mlp_layers):
-            self.add_link('l{}'.format(i), L.Linear(features_dim, mlp_dim))
+            setattr(self, 'l{}'.format(i), nn.Linear(features_dim, mlp_dim))
             if mlp_bn:
-                self.add_link('bn{}'.format(i), L.BatchNormalization(mlp_dim))
+                # TODO: Add batch norm in semantic classifier.
+                raise NotImplementedError()
             features_dim = mlp_dim
-        self.add_link('l{}'.format(num_mlp_layers), L.Linear(features_dim, num_classes))
+        setattr(self, 'l{}'.format(num_mlp_layers), nn.Linear(features_dim, num_classes))
 
 
     def build_example(self, sentences, transitions, train):
