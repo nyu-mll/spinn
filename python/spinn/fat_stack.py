@@ -461,27 +461,19 @@ class BaseModel(nn.Module):
 
 
     def run_embed(self, example, train):
-        embeds = self.embed(example.tokens, train)
+        # Embed all tokens.
+        emb = self._embed(example.tokens)
 
-        b, l = example.tokens.shape[:2]
+        # TODO: Add dropout.
+        # TODO: Add batch norm.
 
-        embeds = F.split_axis(to_cpu(embeds), b, axis=0, force_tuple=True)
-        embeds = [F.expand_dims(x, 0) for x in embeds]
-        embeds = F.concat(embeds, axis=0)
-
-        if self.use_encode:
-            _, _, fwd_hs = self.fwd_rnn(embeds, train, keep_hs=True)
-            _, _, bwd_hs = self.bwd_rnn(embeds, train, keep_hs=True, reverse=True)
-            hs = F.concat([fwd_hs, bwd_hs], axis=2)
-            embeds = hs
-
-        embeds = [F.split_axis(x, l, axis=0, force_tuple=True) for x in embeds]
-        buffers = [list(reversed(x)) for x in embeds]
-
-        assert b == len(buffers)
-
+        batch_size, seq_length = emb.size()[:2]
+        # Split twice:
+        # 1. (#batch_size, #seq_length, #embed_dim) => [(1, #seq_length, #embed_dim)] x #batch_size
+        # 2. (#seq_length, #embed_dim) => [(1, #embed_dim)] x #seq_length
+        emb = [torch.chunk(torch.squeeze(x), seq_length, 0) for x in torch.chunk(emb, batch_size, 0)]
+        buffers = [list(reversed(x)) for x in emb]
         example.tokens = buffers
-
         return example
 
 
@@ -702,16 +694,16 @@ class SentencePairModel(BaseModel):
 
 class SentenceModel(BaseModel):
     def build_example(self, sentences, transitions, train):
-        batch_size = sentences.shape[0]
+        batch_size = sentences.size(0)
 
         # Build Tokens
-        x = sentences
+        x = Variable(sentences, volatile=not train)
 
         # Build Transitions
         t = transitions
 
         example = {
-            'tokens': Variable(x, volatile=not train),
+            'tokens': x,
             'transitions': t
         }
         example = argparse.Namespace(**example)
