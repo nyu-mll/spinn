@@ -52,7 +52,7 @@ def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_di
                               gpu, mlp_dim):
     model = model_cls(model_dim, word_embedding_dim, vocab_size,
              seq_length, initial_embeddings, num_classes, mlp_dim=mlp_dim,
-             input_keep_rate=FLAGS.embedding_keep_rate,
+             embedding_keep_rate=FLAGS.embedding_keep_rate,
              classifier_keep_rate=FLAGS.semantic_classifier_keep_rate,
              use_input_norm=FLAGS.use_input_norm,
              tracker_keep_rate=FLAGS.tracker_keep_rate,

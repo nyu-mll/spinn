@@ -392,7 +392,7 @@ class SPINN(nn.Module):
 class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
-                 input_keep_rate, classifier_keep_rate,
+                 embedding_keep_rate, classifier_keep_rate,
                  tracker_keep_rate=1.0,
                  use_input_norm=False,
                  gpu=-1,
@@ -441,6 +441,7 @@ class BaseModel(nn.Module):
 
         self.initial_embeddings = initial_embeddings
         self.classifier_dropout_rate = 1. - classifier_keep_rate
+        self.embedding_dropout_rate = 1. - embedding_keep_rate
         self.word_embedding_dim = word_embedding_dim
         self.use_encode = use_encode
         self.transition_weight = transition_weight
@@ -453,7 +454,6 @@ class BaseModel(nn.Module):
             'tracker_size': tracking_lstm_hidden_dim if use_tracking_lstm else None,
             'use_tracking_in_composition': use_tracking_in_composition,
             'transition_weight': transition_weight,
-            'input_dropout_rate': 1. - input_keep_rate,
             'use_input_norm': use_input_norm,
             'tracker_dropout_rate': 1. - tracker_keep_rate,
         }
@@ -516,8 +516,8 @@ class BaseModel(nn.Module):
     def run_embed(self, example, train):
         # Embed all tokens.
         emb = self._embed(example.tokens)
+        emb = dropout(emb, self.embedding_dropout_rate, train)
 
-        # TODO: Add dropout.
         # TODO: Add batch norm.
 
         batch_size, seq_length = emb.size()[:2]
@@ -570,8 +570,7 @@ class BaseModel(nn.Module):
                 bn = getattr(self, 'bn{}'.format(i))
                 h = bn(h, test=not train, finetune=False)
             # TODO: Theano code rescales during Eval. This is opposite of what Chainer does.
-            # dropout
-            # h = dropout(h, ratio=self.classifier_dropout_rate, train=train)
+            h = dropout(h, self.classifier_dropout_rate, train)
         layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
         h = layer(h)
         y = F.log_softmax(h)

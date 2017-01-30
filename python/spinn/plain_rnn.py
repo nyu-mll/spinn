@@ -30,7 +30,7 @@ class SentenceTrainer(SentencePairTrainer):
 class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
-                 input_keep_rate, classifier_keep_rate,
+                 embedding_keep_rate, classifier_keep_rate,
                  use_tracker_dropout=True, tracker_dropout_rate=0.1,
                  use_input_dropout=False, use_input_norm=False,
                  use_classifier_norm=True,
