@@ -437,45 +437,8 @@ class BaseModel(nn.Module):
         self.baseline = 0
 
         if rl_baseline == "policy":
-            baseline_model_module = spinn.cbow
+            raise NotImplementedError()
 
-            if use_sentence_pair:
-                baseline_model_cls = baseline_model_module.SentencePairModel
-            else:
-                baseline_model_cls = baseline_model_module.SentenceModel
-
-            _model_dim = word_embedding_dim
-            _num_classes = 1 # Reward will be between 0 and 1
-
-            # TODO:
-            # The policy net is naively initialized. Certain features
-            # such as keep_rate, batch_norm, num_mlp_layers,
-            # etc. are simply taken from the hyperparams. We might
-            # want these to be different.
-            self.add_link("policy", baseline_model_cls(_model_dim, word_embedding_dim, vocab_size,
-             seq_length, initial_embeddings, _num_classes,
-             mlp_dim=rl_policy_dim,
-             input_keep_rate=input_keep_rate,
-             classifier_keep_rate=classifier_keep_rate,
-             use_input_norm=use_input_norm,
-             tracker_keep_rate=tracker_keep_rate,
-             tracking_lstm_hidden_dim=tracking_lstm_hidden_dim,
-             transition_weight=transition_weight,
-             use_tracking_lstm=use_tracking_lstm,
-             use_tracking_in_composition=use_tracking_in_composition,
-             use_sentence_pair=use_sentence_pair,
-             num_mlp_layers=num_mlp_layers,
-             mlp_bn=mlp_bn,
-             gpu=gpu,
-             use_skips=use_skips,
-             use_encode=False,
-             projection_dim=projection_dim,
-             use_difference_feature=use_difference_feature,
-             use_product_feature=use_product_feature,
-            ))
-
-        self.__gpu = gpu
-        self.__mod = cuda.cupy if gpu >= 0 else np
         self.initial_embeddings = initial_embeddings
         self.classifier_dropout_rate = 1. - classifier_keep_rate
         self.word_embedding_dim = word_embedding_dim
@@ -607,7 +570,8 @@ class BaseModel(nn.Module):
                 bn = getattr(self, 'bn{}'.format(i))
                 h = bn(h, test=not train, finetune=False)
             # TODO: Theano code rescales during Eval. This is opposite of what Chainer does.
-            h = dropout(h, ratio=self.classifier_dropout_rate, train=train)
+            # dropout
+            # h = dropout(h, ratio=self.classifier_dropout_rate, train=train)
         layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
         h = layer(h)
         y = F.log_softmax(h)
