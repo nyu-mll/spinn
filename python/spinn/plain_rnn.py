@@ -124,30 +124,23 @@ class BaseModel(nn.Module):
 
 class SentencePairModel(BaseModel):
     def __call__(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        raise NotImplementedError()
-
-        batch_size = sentences.size(0)
+        batch_size, seq_length = sentences.size()[:2]
 
         # Build Tokens
         x_prem = Variable(sentences[:,:,0], volatile=not train)
         x_hyp = Variable(sentences[:,:,1], volatile=not train)
-        x = F.concat([x_prem, x_hyp], axis=0)
+        x = torch.cat([x_prem, x_hyp], 0)
 
         emb = self.embed(x, train)
-        _, hh, _ = self.fwd_rnn(emb, train, keep_hs=False)
-        h = F.concat([hh[:batch_size], hh[batch_size:]], axis=1)
-        y = self.run_mlp(h, train)
+        hh = torch.squeeze(self.run_rnn(emb))
+        h = torch.cat([hh[:batch_size], hh[batch_size:]], 1)
+        logits = self.run_mlp(h, train)
 
-        # Calculate Loss & Accuracy.
         if y_batch is not None:
-            accum_loss = self.classifier(y, Variable(y_batch, volatile=not train), train)
-            self.accuracy = self.accFun(y, self.xp.array(y_batch))
-            acc = self.accuracy.data
-        else:
-            accum_loss = 0.0
-            acc = 0.0
-
-        return y, accum_loss, acc, 0.0, None, None
+            loss = F.nll_loss(logits, Variable(y_batch, volatile=not train))
+            pred = logits.data.max(1)[1] # get the index of the max log-probability
+            acc = pred.eq(y_batch).sum() / float(y_batch.size(0))
+        return logits, loss, acc, 0.0, None, None
 
 
 class SentenceModel(BaseModel):
@@ -158,8 +151,7 @@ class SentenceModel(BaseModel):
         x = Variable(sentences, volatile=not train)
 
         emb = self.embed(x, train)
-        h = self.run_rnn(emb)
-        h = torch.squeeze(h)
+        h = torch.squeeze(self.run_rnn(emb))
         logits = self.run_mlp(h, train)
 
         _, h, _ = self.fwd_rnn(embeds, train, keep_hs=False)
@@ -167,9 +159,9 @@ class SentenceModel(BaseModel):
 
         # Calculate Loss & Accuracy.
         if y_batch is not None:
-            loss = F.nll_loss(logits, Variable(y_batch))
+            loss = F.nll_loss(logits, Variable(y_batch, volatile=not train))
             pred = logits.data.max(1)[1] # get the index of the max log-probability
-            acc = pred.eq(Variable(y_batch).data).sum() / float(y_batch.size(0))
+            acc = pred.eq(y_batch).sum() / float(y_batch.size(0))
         else:
             accum_loss = 0.0
             acc = 0.0
