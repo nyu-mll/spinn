@@ -473,6 +473,8 @@ class BaseModel(nn.Module):
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
 
+        # TODO: Add projection layer.
+
         self.spinn = SPINN(args, vocab, use_skips=use_skips)
 
         # TODO: Add encoding layer.
@@ -503,8 +505,7 @@ class BaseModel(nn.Module):
         for i in range(num_mlp_layers):
             setattr(self, 'l{}'.format(i), nn.Linear(features_dim, mlp_dim))
             if mlp_bn:
-                # TODO: Add batch norm in semantic classifier.
-                raise NotImplementedError()
+                setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
             features_dim = mlp_dim
         setattr(self, 'l{}'.format(num_mlp_layers), nn.Linear(features_dim, num_classes))
 
@@ -568,7 +569,7 @@ class BaseModel(nn.Module):
             h = F.relu(h)
             if self.mlp_bn:
                 bn = getattr(self, 'bn{}'.format(i))
-                h = bn(h, test=not train, finetune=False)
+                h = bn(h)
             # TODO: Theano code rescales during Eval. This is opposite of what Chainer does.
             h = dropout(h, self.classifier_dropout_rate, train)
         layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
