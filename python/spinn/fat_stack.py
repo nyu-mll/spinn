@@ -250,7 +250,6 @@ class SPINN(nn.Module):
             if hasattr(self, 'tracker') and (self.use_skips or sum(cant_skip) > 0):
                 transition_hyp = self.tracker(self.bufs, self.stacks, train)
                 if transition_hyp is not None and run_internal_parser:
-                    transition_hyp = to_cpu(transition_hyp)
                     if hasattr(self, 'transitions'):
                         memory = {}
                         truth_acc = transitions
@@ -264,7 +263,7 @@ class SPINN(nn.Module):
                             hyp_acc = probas
                             truth_xent = samples
                         else:
-                            transition_preds = transition_hyp.data.argmax(axis=1)
+                            transition_preds = transition_hyp.data.numpy().argmax(axis=1)
                             hyp_acc = transition_hyp
                             truth_xent = transitions
 
@@ -280,12 +279,12 @@ class SPINN(nn.Module):
                         memory["preds"]  = transition_preds
 
                         if not self.use_skips:
-                            hyp_acc = hyp_acc.data[cant_skip]
+                            hyp_acc = hyp_acc.data.numpy()[cant_skip]
                             truth_acc = truth_acc[cant_skip]
 
                             cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
-                            hyp_xent = F.split_axis(transition_hyp, transition_hyp.shape[0], axis=0)
-                            hyp_xent = F.concat([hyp_xent[iii] for iii, y in enumerate(cant_skip) if y], axis=0)
+                            hyp_xent = torch.chunk(transition_hyp, transition_hyp.size(0), 0)
+                            hyp_xent = torch.cat([hyp_xent[iii] for iii, y in enumerate(cant_skip) if y], 0)
                             truth_xent = truth_xent[cant_skip]
 
                         self.transition_mask[cant_skip, i] = True
@@ -425,6 +424,7 @@ class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
                  embedding_keep_rate, classifier_keep_rate,
+                 project_embeddings=True,
                  tracker_keep_rate=1.0,
                  use_input_norm=False,
                  gpu=-1,
@@ -492,10 +492,13 @@ class BaseModel(nn.Module):
             self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
             self._embed.weight.requires_grad = False
         else:
-            raise NotImplementedError("Need to double check for correctness.")
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
-        self.project = nn.Linear(word_embedding_dim, model_dim)
+        
+        if project_embeddings:
+            self.project = nn.Linear(word_embedding_dim, model_dim)
+        else:
+            self.project = lambda x: x
 
         # TODO: Add encoding layer.
         if self.use_encode:

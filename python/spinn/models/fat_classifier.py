@@ -27,7 +27,6 @@ from spinn.util.data import SimpleProgressBar
 import spinn.fat_stack
 import spinn.plain_rnn
 import spinn.cbow
-import spinn.nti
 
 import torch
 
@@ -48,10 +47,11 @@ def flatten(l):
 
 
 def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_dim,
-                              seq_length, num_classes, initial_embeddings, use_sentence_pair,
-                              gpu, mlp_dim):
+                seq_length, num_classes, initial_embeddings, use_sentence_pair,
+                gpu, mlp_dim, project_embeddings):
     model = model_cls(model_dim, word_embedding_dim, vocab_size,
              seq_length, initial_embeddings, num_classes, mlp_dim=mlp_dim,
+             project_embeddings=project_embeddings,
              embedding_keep_rate=FLAGS.embedding_keep_rate,
              classifier_keep_rate=FLAGS.semantic_classifier_keep_rate,
              use_input_norm=FLAGS.use_input_norm,
@@ -280,7 +280,7 @@ def run(only_forward=False):
     elif FLAGS.model_type == "RNN":
         model_module = spinn.plain_rnn
     elif FLAGS.model_type == "NTI":
-        model_module = spinn.nti
+        raise NotImplementedError()
     elif FLAGS.model_type == "SPINN":
         model_module = spinn.fat_stack
     else:
@@ -301,7 +301,9 @@ def run(only_forward=False):
                               FLAGS.seq_length, num_classes, initial_embeddings,
                               use_sentence_pair,
                               FLAGS.gpu,
-                              FLAGS.mlp_dim)
+                              FLAGS.mlp_dim,
+                              project_embeddings=(not train_embeddings),
+                              )
     else:
         if hasattr(model_module, 'SentenceTrainer') and hasattr(model_module, 'SentenceModel'):
             trainer_cls = model_module.SentenceTrainer
@@ -316,7 +318,9 @@ def run(only_forward=False):
                               FLAGS.seq_length, num_classes, initial_embeddings,
                               use_sentence_pair,
                               FLAGS.gpu,
-                              FLAGS.mlp_dim)
+                              FLAGS.mlp_dim,
+                              project_embeddings=(not train_embeddings),
+                              )
 
     if ".ckpt" in FLAGS.ckpt_path:
         checkpoint_path = FLAGS.ckpt_path
