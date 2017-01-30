@@ -389,6 +389,38 @@ class SPINN(nn.Module):
         return hyp_acc, truth_acc, hyp_xent, truth_xent
 
 
+class MLP(nn.Module):
+    def __init__(self, mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
+                 classifier_dropout_rate=0.0):
+        super(MLP, self).__init__()
+
+        self.num_mlp_layers = num_mlp_layers
+        self.mlp_bn = mlp_bn
+        self.classifier_dropout_rate = classifier_dropout_rate
+
+        features_dim = mlp_input_dim
+        for i in range(num_mlp_layers):
+            setattr(self, 'l{}'.format(i), nn.Linear(features_dim, mlp_dim))
+            if mlp_bn:
+                setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
+            features_dim = mlp_dim
+        setattr(self, 'l{}'.format(num_mlp_layers), nn.Linear(features_dim, num_classes))
+
+    def forward(self, h, train):
+        for i in range(self.num_mlp_layers):
+            layer = getattr(self, 'l{}'.format(i))
+            h = layer(h)
+            h = F.relu(h)
+            if self.mlp_bn:
+                bn = getattr(self, 'bn{}'.format(i))
+                h = bn(h)
+            h = dropout(h, self.classifier_dropout_rate, train)
+        layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
+        h = layer(h)
+        y = F.log_softmax(h)
+        return y
+
+
 class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
                  seq_length, initial_embeddings, num_classes, mlp_dim,
@@ -423,13 +455,6 @@ class BaseModel(nn.Module):
         self.use_difference_feature = (use_difference_feature and use_sentence_pair)
         self.use_product_feature = (use_product_feature and use_sentence_pair)
         self.use_sentence_pair = use_sentence_pair
-        
-        # Initialize Classifier Parameters
-        self.init_mlp(mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn)
-        self.mlp_input_dim = mlp_input_dim
-        self.mlp_dim = mlp_dim
-        self.num_mlp_layers = num_mlp_layers
-        self.mlp_bn = mlp_bn
 
         # RL Params
         self.reinforce_lr = 0.01
@@ -481,6 +506,16 @@ class BaseModel(nn.Module):
         if self.use_encode:
             raise NotImplementedError()
 
+        features_dim = mlp_input_dim
+        if self.use_sentence_pair:
+            if self.use_difference_feature:
+                features_dim += self.stack_hidden_dim
+            if self.use_product_feature:
+                features_dim += self.stack_hidden_dim
+
+        self.mlp = MLP(features_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
+            classifier_dropout_rate=self.classifier_dropout_rate)
+
         self.init_params()
         print(self)
 
@@ -496,22 +531,24 @@ class BaseModel(nn.Module):
                     w.data.uniform_(-initrange, initrange)
 
 
-    def init_mlp(self, mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn):
-        features_dim = mlp_input_dim
-        if self.use_difference_feature:
-            features_dim += self.stack_hidden_dim
-        if self.use_product_feature:
-            features_dim += self.stack_hidden_dim
-        for i in range(num_mlp_layers):
-            setattr(self, 'l{}'.format(i), nn.Linear(features_dim, mlp_dim))
-            if mlp_bn:
-                setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
-            features_dim = mlp_dim
-        setattr(self, 'l{}'.format(num_mlp_layers), nn.Linear(features_dim, num_classes))
-
-
     def build_example(self, sentences, transitions, train):
         raise Exception('Not implemented.')
+
+
+    def build_h(self, h):
+        if self.use_sentence_pair:
+            # Extract both example outputs, and strip off 'c' states.
+            prem, hyp = h[:, :self.stack_hidden_dim], h[:, self.stack_hidden_dim*2:self.stack_hidden_dim*3]
+            hs = [prem, hyp]
+            if self.use_difference_feature:
+                hs.append(prem - hyp)
+            if self.use_product_feature:
+                hs.append(prem * hyp)
+            h = torch.cat(hs, 1)
+        else:
+            # Strip off 'c' states.
+            h = h[:, :self.stack_hidden_dim]
+        return h
 
 
     def run_embed(self, example, train):
@@ -519,7 +556,7 @@ class BaseModel(nn.Module):
         emb = self._embed(example.tokens)
         emb = dropout(emb, self.embedding_dropout_rate, train)
 
-        # TODO: Add batch norm.
+        # TODO: Add batch norm?
 
         batch_size, seq_length = emb.size()[:2]
         # Split twice:
@@ -545,39 +582,6 @@ class BaseModel(nn.Module):
         return h_both, transition_acc, transition_loss
 
 
-    def run_mlp(self, h, train):
-        # Pass through MLP Classifier.
-        batch_size = h.size(0)
-
-        if self.use_sentence_pair:
-            # Extract both example outputs, and strip off 'c' states.
-            prem, hyp = h[:, :self.stack_hidden_dim], h[:, self.stack_hidden_dim*2:self.stack_hidden_dim*3]
-            hs = [prem, hyp]
-            if self.use_difference_feature:
-                hs.append(prem - hyp)
-            if self.use_product_feature:
-                hs.append(prem * hyp)
-            h = torch.cat(hs, 1)
-
-        else:
-            # Strip off 'c' states.
-            h = h[:, :self.stack_hidden_dim]
-
-        for i in range(self.num_mlp_layers):
-            layer = getattr(self, 'l{}'.format(i))
-            h = layer(h)
-            h = F.relu(h)
-            if self.mlp_bn:
-                bn = getattr(self, 'bn{}'.format(i))
-                h = bn(h)
-            # TODO: Theano code rescales during Eval. This is opposite of what Chainer does.
-            h = dropout(h, self.classifier_dropout_rate, train)
-        layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
-        h = layer(h)
-        y = F.log_softmax(h)
-        return y
-
-
     def __call__(self, sentences, transitions, y_batch=None, train=True,
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema",
                  use_internal_parser=False, validate_transitions=True, use_random=False):
@@ -585,7 +589,8 @@ class BaseModel(nn.Module):
         example_embed = self.run_embed(example, train)
         h, transition_acc, transition_loss = self.run_spinn(example_embed, train, use_internal_parser,
             validate_transitions, use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
-        y = self.run_mlp(h, train)
+        h = self.build_h(h)
+        y = self.mlp(h, train)
 
         # Calculate Loss & Accuracy.
         if y_batch is not None:
