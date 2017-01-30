@@ -15,7 +15,7 @@ import torch.optim as optim
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle
 from spinn.util.blocks import treelstm, expand_along, dropout
-from spinn.util.blocks import var_mean
+from spinn.util.blocks import var_mean, get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
 from sklearn import metrics
@@ -471,11 +471,8 @@ class BaseModel(nn.Module):
         self.use_encode = use_encode
         self.transition_weight = transition_weight
 
-        if projection_dim <= 0 or not self.use_encode:
-            projection_dim = self.stack_hidden_dim
-
         args = {
-            'size': projection_dim,
+            'size': self.stack_hidden_dim,
             'tracker_size': tracking_lstm_hidden_dim if use_tracking_lstm else None,
             'use_tracking_in_composition': use_tracking_in_composition,
             'transition_weight': transition_weight,
@@ -495,16 +492,16 @@ class BaseModel(nn.Module):
             self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
             self._embed.weight.requires_grad = False
         else:
+            raise NotImplementedError("Need to double check for correctness.")
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
-
-        # TODO: Add projection layer.
-
-        self.spinn = SPINN(args, vocab, use_skips=use_skips)
+        self.project = nn.Linear(word_embedding_dim, model_dim)
 
         # TODO: Add encoding layer.
         if self.use_encode:
             raise NotImplementedError()
+
+        self.spinn = SPINN(args, vocab, use_skips=use_skips)
 
         features_dim = mlp_input_dim
         if self.use_sentence_pair:
@@ -516,19 +513,9 @@ class BaseModel(nn.Module):
         self.mlp = MLP(features_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
             classifier_dropout_rate=self.classifier_dropout_rate)
 
-        self.init_params()
+        # TODO: Add HeKaimingInit in a reset_parameters() method.
+
         print(self)
-
-
-    def init_params(self):
-        initrange = 0.1
-        for w in self.parameters():
-            if w.requires_grad:
-                print(w.size())
-                if len(w.size()) >= 2:
-                    w.data.set_(torch.from_numpy(HeKaimingInit(w.data.size())).float())
-                else:
-                    w.data.uniform_(-initrange, initrange)
 
 
     def build_example(self, sentences, transitions, train):
@@ -552,17 +539,25 @@ class BaseModel(nn.Module):
 
 
     def run_embed(self, example, train):
+        batch_size, seq_length = example.tokens.size()
+
         # Embed all tokens.
-        emb = self._embed(example.tokens)
+        emb = self._embed(example.tokens.view(-1))
         emb = dropout(emb, self.embedding_dropout_rate, train)
+        emb = self.project(emb)
+        
+        # Fancy Projection. Only use input embeddings as state.h. (disabled)
+        # emb = get_state(h=emb, c=Variable(
+        #     torch.from_numpy(np.zeros(emb.size(), dtype=np.float32)),
+        #     volatile=not train)
+        #     )
 
         # TODO: Add batch norm?
 
-        batch_size, seq_length = emb.size()[:2]
         # Split twice:
-        # 1. (#batch_size, #seq_length, #embed_dim) => [(1, #seq_length, #embed_dim)] x #batch_size
+        # 1. (#batch_size x #seq_length, #embed_dim) => [(#seq_length, #embed_dim)] x #batch_size
         # 2. (#seq_length, #embed_dim) => [(1, #embed_dim)] x #seq_length
-        emb = [torch.chunk(torch.squeeze(x), seq_length, 0) for x in torch.chunk(emb, batch_size, 0)]
+        emb = [torch.chunk(x, seq_length, 0) for x in torch.chunk(emb, batch_size, 0)]
         buffers = [list(reversed(x)) for x in emb]
         example.tokens = buffers
         return example

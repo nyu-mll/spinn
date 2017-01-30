@@ -66,7 +66,6 @@ def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_di
              gpu=gpu,
              use_skips=FLAGS.use_skips,
              use_encode=FLAGS.use_encode,
-             projection_dim=FLAGS.projection_dim,
              use_difference_feature=FLAGS.use_difference_feature,
              use_product_feature=FLAGS.use_product_feature,
              rl_baseline=None if not FLAGS.use_reinforce else FLAGS.rl_baseline,
@@ -610,7 +609,6 @@ if __name__ == '__main__':
     gflags.DEFINE_enum("rl_baseline", "ema", ["ema", "policy", "greedy"], "Specify REINFORCE baseline.")
     gflags.DEFINE_integer("rl_policy_dim", 128, "Specify size of policy net classifier.")
     gflags.DEFINE_boolean("use_encode", False, "Encode output of projection layer using bidirectional RNN")
-    gflags.DEFINE_integer("projection_dim", -1, "Dimension for projection network.")
     gflags.DEFINE_boolean("use_skips", False, "Pad transitions with SKIP actions.")
     gflags.DEFINE_boolean("use_left_padding", True, "Pad transitions only on the LHS.")
     gflags.DEFINE_boolean("validate_transitions", True, "Constrain predicted transitions to ones"
