@@ -12,7 +12,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.optim as optim
 
-from spinn.util.blocks import LSTMState, Reduce, LSTMChain
+from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle
 from spinn.util.blocks import treelstm, expand_along, dropout
 from spinn.util.blocks import var_mean
@@ -30,13 +30,7 @@ T_SKIP   = 2
 
 class SentencePairTrainer(BaseSentencePairTrainer):
     def init_params(self, **kwargs):
-        for name, param in self.model.namedparams():
-            data = param.data
-            print("Init: {}:{}".format(name, data.shape))
-            if len(data.shape) >= 2:
-                data[:] = HeKaimingInit(data.shape)
-            else:
-                data[:] = np.random.uniform(-0.1, 0.1, data.shape)
+        raise NotImplementedError()
 
     def init_optimizer(self, lr=0.01, l2_lambda=0.0, **kwargs):
         relevant_params = [w for w in self.model.parameters() if w.requires_grad]
@@ -47,14 +41,106 @@ class SentenceTrainer(SentencePairTrainer):
     pass
 
 
+# Use these manually defined classes because the one in pytorch has a bug related to
+# __repr__ function. Fix has been submitted, so can change to the main one soon.
+
+import math
+from torch.nn import Module, Parameter
+
+class RNNCellBase(Module):
+
+    def __repr__(self):
+        s = '{name}({input_size}, {hidden_size}'
+        if 'bias' in self.__dict__ and self.bias is not True:
+            s += ', bias={bias}'
+        if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
+            s += ', nonlinearity={nonlinearity}'
+        s += ')'
+        return s.format(name=self.__class__.__name__, **self.__dict__)
+
+
+class LSTMCell(RNNCellBase):
+    r"""A long short-term memory (LSTM) cell.
+
+    .. math::
+
+        \begin{array}{ll}
+        i = sigmoid(W_{ii} x + b_{ii} + W_{hi} h + b_{hi}) \\
+        f = sigmoid(W_{if} x + b_{if} + W_{hf} h + b_{hf}) \\
+        g = \tanh(W_{ig} x + b_{ig} + W_{hc} h + b_{hg}) \\
+        o = sigmoid(W_{io} x + b_{io} + W_{ho} h + b_{ho}) \\
+        c' = f * c + i * g \\
+        h' = o * \tanh(c_t) \\
+        \end{array}
+
+    Args:
+        input_size: The number of expected features in the input x
+        hidden_size: The number of features in the hidden state h
+        bias: If `False`, then the layer does not use bias weights `b_ih` and `b_hh`. Default: True
+
+    Inputs: input, (h_0, c_0)
+        - **input** (batch, input_size): tensor containing input features
+        - **h_0** (batch, hidden_size): tensor containing the initial hidden state for each element in the batch.
+        - **c_0** (batch. hidden_size): tensor containing the initial cell state for each element in the batch.
+
+    Outputs: h_1, c_1
+        - **h_1** (batch, hidden_size): tensor containing the next hidden state for each element in the batch
+        - **c_1** (batch, hidden_size): tensor containing the next cell state for each element in the batch
+
+    Attributes:
+        weight_ih: the learnable input-hidden weights, of shape `(input_size x hidden_size)`
+        weight_hh: the learnable hidden-hidden weights, of shape `(hidden_size x hidden_size)`
+        bias_ih: the learnable input-hidden bias, of shape `(hidden_size)`
+        bias_hh: the learnable hidden-hidden bias, of shape `(hidden_size)`
+
+    Examples::
+
+        >>> rnn = nn.LSTMCell(10, 20)
+        >>> input = Variable(torch.randn(3, 10))
+        >>> hx = Variable(torch.randn(3, 20))
+        >>> cx = Variable(torch.randn(3, 20))
+        >>> output = []
+        >>> for i in range(6):
+        ...     hx, cx = rnn(input, (hx, cx))
+        ...     output[i] = hx
+    """
+
+    def __init__(self, input_size, hidden_size, bias=True):
+        super(LSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.bias = bias
+        self.weight_ih = Parameter(torch.Tensor(4 * hidden_size, input_size))
+        self.weight_hh = Parameter(torch.Tensor(4 * hidden_size, hidden_size))
+        if bias:
+            self.bias_ih = Parameter(torch.Tensor(4 * hidden_size))
+            self.bias_hh = Parameter(torch.Tensor(4 * hidden_size))
+        else:
+            self.register_parameter('bias_ih', None)
+            self.register_parameter('bias_hh', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+
+    def forward(self, input, hx):
+        return self._backend.LSTMCell(
+            input, hx,
+            self.weight_ih, self.weight_hh,
+            self.bias_ih, self.bias_hh,
+        )
+
+
 class Tracker(nn.Module):
 
     def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False):
         super(Tracker, self).__init__()
-        self.lateral = nn.Linear(tracker_size, 4 * tracker_size)
         self.buf = nn.Linear(size, 4 * tracker_size, bias=False)
         self.stack1 = nn.Linear(size, 4 * tracker_size, bias=False)
         self.stack2 = nn.Linear(size, 4 * tracker_size, bias=False)
+        self.lstm = LSTMCell(4 * tracker_size, tracker_size, bias=False)
         if predict:
             self.transition = nn.Linear(tracker_size, 3 if use_skips else 2)
         self.state_size = tracker_size
@@ -66,8 +152,9 @@ class Tracker(nn.Module):
 
     def __call__(self, bufs, stacks, train):
         self.batch_size = len(bufs)
-        zeros = Variable(np.zeros(bufs[0][0].shape, dtype=bufs[0][0].data.dtype),
-                         volatile=not train)
+        zeros = Variable(torch.from_numpy(
+            np.zeros(bufs[0][0].size(), dtype=np.float32),
+            ), volatile=not train)
         buf = bundle(buf[-1] for buf in bufs)
         stack1 = bundle(stack[-1] if len(stack) > 0 else zeros for stack in stacks)
         stack2 = bundle(stack[-2] if len(stack) > 1 else zeros for stack in stacks)
@@ -75,17 +162,20 @@ class Tracker(nn.Module):
         lstm_in = self.buf(buf.h)
         lstm_in += self.stack1(stack1.h)
         lstm_in += self.stack2(stack2.h)
-        if self.h is not None:
-            lstm_in += self.lateral(self.h)
         if self.c is None:
-            self.c = Variable(
-                self.xp.zeros((self.batch_size, self.state_size),
-                              dtype=lstm_in.data.dtype),
+            self.c = Variable(torch.from_numpy(
+                np.zeros((self.batch_size, self.state_size),
+                              dtype=np.float32)),
+                volatile=not train)
+        if self.h is None:
+            self.h = Variable(torch.from_numpy(
+                np.zeros((self.batch_size, self.state_size),
+                              dtype=np.float32)),
                 volatile=not train)
 
-        lstm_in = dropout(lstm_in, self.tracker_dropout_rate, train=train)
+        # TODO: Tracker dropout.
 
-        self.c, self.h = F.lstm(self.c, lstm_in)
+        self.h, self.c = self.lstm(lstm_in, (self.h, self.c))
         if hasattr(self, 'transition'):
             return self.transition(self.h)
         return None
@@ -243,7 +333,6 @@ class SPINN(nn.Module):
                         transition_arr, self.stacks):
                     if transition == T_REDUCE: # reduce
                         new_stack_item = next(reduced)
-                        assert isinstance(new_stack_item.data, np.ndarray), "Pushing cupy array to stack"
                         stack.append(new_stack_item)
 
         if self.transition_weight is not None:
@@ -290,7 +379,7 @@ class SPINN(nn.Module):
             for m in self.memories])
 
         statistics = [
-            F.squeeze(F.concat([F.expand_dims(ss, 1) for ss in s], axis=0))
+            torch.squeeze(torch.cat([F.expand_dims(ss, 1) for ss in s], 0))
             if isinstance(s[0], Variable) else
             np.array(reduce(lambda x, y: x + y.tolist(), s, []))
             for s in statistics]
@@ -493,21 +582,22 @@ class BaseModel(nn.Module):
 
     def run_mlp(self, h, train):
         # Pass through MLP Classifier.
-        batch_size = h.shape[:2]
+        batch_size = h.size(0)
 
         if self.use_sentence_pair:
+            # Extract both example outputs, and strip off 'c' states.
             prem, hyp = h[:, :self.stack_hidden_dim], h[:, self.stack_hidden_dim*2:self.stack_hidden_dim*3]
-            h = F.concat([prem, hyp], axis=1)  # Strip off 'c' states.   
+            hs = [prem, hyp]
             if self.use_difference_feature:
-                h = F.concat([h, prem - hyp], axis=1)
-            
+                hs.append(prem - hyp)
             if self.use_product_feature:
-                h = F.concat([h, prem * hyp], axis=1)
+                hs.append(prem * hyp)
+            h = torch.cat(hs, 1)
 
         else:
-            h = h[:, :self.stack_hidden_dim]  # Strip off 'c' states.   
+            # Strip off 'c' states.
+            h = h[:, :self.stack_hidden_dim]
 
-        h = to_gpu(h)
         for i in range(self.num_mlp_layers):
             layer = getattr(self, 'l{}'.format(i))
             h = layer(h)
@@ -518,7 +608,8 @@ class BaseModel(nn.Module):
             # TODO: Theano code rescales during Eval. This is opposite of what Chainer does.
             h = dropout(h, ratio=self.classifier_dropout_rate, train=train)
         layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
-        y = layer(h)
+        h = layer(h)
+        y = F.log_softmax(h)
         return y
 
 
@@ -533,11 +624,11 @@ class BaseModel(nn.Module):
 
         # Calculate Loss & Accuracy.
         if y_batch is not None:
-            accum_loss = self.classifier(y, Variable(y_batch, volatile=not train), train)
-            self.accuracy = self.accFun(y, self.__mod.array(y_batch))
-            acc = self.accuracy.data
+            loss = F.nll_loss(y, Variable(y_batch, volatile=not train))
+            pred = y.data.max(1)[1] # get the index of the max log-probability
+            acc = pred.eq(y_batch).sum() / float(y_batch.size(0))
         else:
-            accum_loss = 0.0
+            loss = None
             acc = 0.0
 
         if train and use_reinforce:
@@ -572,7 +663,7 @@ class BaseModel(nn.Module):
         if rl_baseline == "policy" and baseline_loss is not None:
             rl_loss += baseline_loss
 
-        return y, accum_loss, acc, transition_acc, transition_loss, rl_loss
+        return y, loss, acc, transition_acc, transition_loss, rl_loss
 
 
     def run_policy(self, sentences, transitions, y_batch, train, rewards, rl_style):
@@ -686,9 +777,9 @@ class SentencePairModel(BaseModel):
             example, train, use_internal_parser, validate_transitions,
             use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
         batch_size = len(h_both) / 2
-        h_premise = F.concat(h_both[:batch_size], axis=0)
-        h_hypothesis = F.concat(h_both[batch_size:], axis=0)
-        h = F.concat([h_premise, h_hypothesis], axis=1)
+        h_premise = torch.cat(h_both[:batch_size], 0)
+        h_hypothesis = torch.cat(h_both[batch_size:], 0)
+        h = torch.cat([h_premise, h_hypothesis], 1)
         return h, transition_acc, transition_loss
 
 
@@ -716,5 +807,5 @@ class SentenceModel(BaseModel):
         h, transition_acc, transition_loss = super(SentenceModel, self).run_spinn(
             example, train, use_internal_parser, validate_transitions,
             use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
-        h = F.concat(h, axis=0)
+        h = torch.cat(h, 0)
         return h, transition_acc, transition_loss
