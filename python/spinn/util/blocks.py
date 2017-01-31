@@ -266,11 +266,11 @@ class Reduce(nn.Module):
             tracker is present.
     """
 
-    def __init__(self, size, tracker_size=None):
+    def __init__(self, size, tracker_size=None, use_tracking_in_composition=True):
         super(Reduce, self).__init__()
         self.left = nn.Linear(size, 5 * size)
         self.right = nn.Linear(size, 5 * size, bias=False)
-        if tracker_size is not None:
+        if tracker_size is not None and use_tracking_in_composition:
             self.track = nn.Linear(tracker_size, 5 * size, bias=False)
 
     def __call__(self, left_in, right_in, tracking=None):

@@ -422,9 +422,9 @@ def run(only_forward=False):
                 accum_truth.append(truth)
 
             # Boilerplate for calculating loss.
-            xent_cost_val = xent_loss.data
-            transition_cost_val = transition_loss.data if transition_loss is not None else 0.0
-            rl_cost_val = rl_loss.data if rl_loss is not None else 0.0
+            xent_cost_val = xent_loss.data[0]
+            transition_cost_val = transition_loss.data[0] if transition_loss is not None else 0.0
+            rl_cost_val = rl_loss.data[0] if rl_loss is not None else 0.0
             accum_class_acc.append(class_acc)
 
             # Accumulate Total Loss Data
