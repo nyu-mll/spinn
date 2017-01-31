@@ -208,7 +208,7 @@ class SPINN(nn.Module):
 
 
     def __call__(self, example, train, print_transitions=False, use_internal_parser=False,
-                 validate_transitions=True, use_random=False,
+                 validate_transitions=True,
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         self.bufs = example.tokens
         self.stacks = [[] for buf in self.bufs]
@@ -225,14 +225,13 @@ class SPINN(nn.Module):
         return self.run(train, run_internal_parser=True,
                         use_internal_parser=use_internal_parser,
                         validate_transitions=validate_transitions,
-                        use_random=use_random,
                         use_reinforce=use_reinforce,
                         rl_style=rl_style,
                         rl_baseline=rl_baseline,
                         )
 
     def run(self, train, print_transitions=False, run_internal_parser=False, use_internal_parser=False,
-            validate_transitions=True, use_random=False, use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
+            validate_transitions=True, use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         transition_loss, transition_acc = 0, 0
         if hasattr(self, 'transitions'):
             num_transitions = self.transitions.shape[1]
@@ -257,7 +256,7 @@ class SPINN(nn.Module):
                         if use_reinforce:
                             probas = F.softmax(transition_hyp)
                             samples = np.array([T_SKIP for _ in self.bufs], dtype=np.int32)
-                            samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data[cant_skip]]
+                            samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data.numpy()[cant_skip]]
 
                             transition_preds = samples
                             hyp_acc = probas
@@ -267,10 +266,6 @@ class SPINN(nn.Module):
                             hyp_acc = transition_hyp
                             truth_xent = transitions
 
-                        if use_random:
-                            print("Using random")
-                            transition_preds = np.random.choice(self.choices, len(self.bufs))
-                        
                         if validate_transitions:
                             transition_preds = self.validate(transition_arr, transition_preds,
                                 self.stacks, self.buffers_t, self.buffers_n)
@@ -568,12 +563,11 @@ class BaseModel(nn.Module):
 
 
     def run_spinn(self, example, train, use_internal_parser,
-                  validate_transitions=True, use_random=False,
+                  validate_transitions=True,
                   use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         h_both, transition_loss, transition_acc = self.spinn(example, train,
                                use_internal_parser=use_internal_parser,
                                validate_transitions=validate_transitions,
-                               use_random=use_random,
                                use_reinforce=use_reinforce,
                                rl_style=rl_style,
                                rl_baseline=rl_baseline,
@@ -583,11 +577,11 @@ class BaseModel(nn.Module):
 
     def __call__(self, sentences, transitions, y_batch=None, train=True,
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema",
-                 use_internal_parser=False, validate_transitions=True, use_random=False):
+                 use_internal_parser=False, validate_transitions=True):
         example = self.build_example(sentences, transitions, train)
         example_embed = self.run_embed(example, train)
         h, transition_acc, transition_loss = self.run_spinn(example_embed, train, use_internal_parser,
-            validate_transitions, use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
+            validate_transitions, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
         h = self.build_h(h)
         y = self.mlp(h, train)
 
@@ -741,10 +735,10 @@ class SentencePairModel(BaseModel):
 
 
     def run_spinn(self, example, train, use_internal_parser=False, validate_transitions=True,
-                  use_random=False, use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
+                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         h_both, transition_acc, transition_loss = super(SentencePairModel, self).run_spinn(
             example, train, use_internal_parser, validate_transitions,
-            use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
+            use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
         batch_size = len(h_both) / 2
         h_premise = torch.cat(h_both[:batch_size], 0)
         h_hypothesis = torch.cat(h_both[batch_size:], 0)
@@ -772,9 +766,9 @@ class SentenceModel(BaseModel):
 
 
     def run_spinn(self, example, train, use_internal_parser=False, validate_transitions=True,
-                  use_random=False, use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
+                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         h, transition_acc, transition_loss = super(SentenceModel, self).run_spinn(
             example, train, use_internal_parser, validate_transitions,
-            use_random, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
+            use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
         h = torch.cat(h, 0)
         return h, transition_acc, transition_loss

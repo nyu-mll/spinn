@@ -104,7 +104,7 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
                 use_internal_parser=use_internal_parser,
                 use_reinforce=False,
                 validate_transitions=FLAGS.validate_transitions,
-                use_random=FLAGS.use_random)
+                )
             y, loss, class_acc, transition_acc, transition_loss, rl_loss = ret
             end = time.time()
             acc_value = class_acc
@@ -337,11 +337,6 @@ def run(only_forward=False):
         step = 0
         best_dev_error = 1.0
 
-    if FLAGS.write_summaries:
-        from spinn.tf_logger import TFLogger
-        train_summary_logger = TFLogger(summary_dir=os.path.join(FLAGS.summary_dir, FLAGS.experiment_name, 'train'))
-        dev_summary_logger = TFLogger(summary_dir=os.path.join(FLAGS.summary_dir, FLAGS.experiment_name, 'dev'))
-
     # Setup Trainer
     classifier_trainer.init_optimizer(
         lr=FLAGS.learning_rate,
@@ -402,10 +397,8 @@ def run(only_forward=False):
                     use_reinforce=FLAGS.use_reinforce,
                     rl_style=FLAGS.rl_style,
                     rl_baseline=FLAGS.rl_baseline,
-                    use_random=FLAGS.use_random)
+                    )
             y, xent_loss, class_acc, transition_acc, transition_loss, rl_loss = ret
-
-            xent_loss *= FLAGS.y_lambda
 
             accum_class_preds.append(y.data.max(1)[1])
             accum_class_truth.append(y_batch)
@@ -460,9 +453,6 @@ def run(only_forward=False):
 
             # Accumulate accuracy for current interval.
             acc_val = class_acc
-
-            if FLAGS.write_summaries:
-                train_summary_logger.log(step=step, loss=total_cost_val, accuracy=acc_val)
 
             progress_bar.step(
                 i=max(0, step-1) % FLAGS.statistics_interval_steps + 1,
@@ -537,13 +527,8 @@ def run(only_forward=False):
                         best_dev_error = 1 - acc
                         logger.Log("Checkpointing with new best dev accuracy of %f" % acc)
                         classifier_trainer.save(checkpoint_path, step, best_dev_error)
-                    if FLAGS.write_summaries:
-                        dev_summary_logger.log(step=step, loss=0.0, accuracy=acc)
                 progress_bar.reset()
 
-
-            if FLAGS.profile and step >= FLAGS.profile_steps:
-                break
 
 
 if __name__ == '__main__':
@@ -551,13 +536,7 @@ if __name__ == '__main__':
     gflags.DEFINE_bool("debug", False, "Set to True to disable debug_mode and type_checking.")
     gflags.DEFINE_bool("transitions_confusion_matrix", False, "Periodically print CM on transitions.")
     gflags.DEFINE_bool("class_confusion_matrix", False, "Periodically print CM on classes.")
-    gflags.DEFINE_bool("gradient_check", False, "Randomly check that gradients match estimates.")
-    gflags.DEFINE_bool("profile", False, "Set to True to quit after a few batches.")
-    gflags.DEFINE_bool("write_summaries", False, "Toggle which controls whether summaries are written.")
     gflags.DEFINE_bool("show_progress_bar", True, "Turn this off when running experiments on HPC.")
-    gflags.DEFINE_bool("show_intermediate_stats", False, "Print stats more frequently than regular interval."
-                                                         "Mostly to retain timing with progress bar")
-    gflags.DEFINE_integer("profile_steps", 3, "Specify how many steps to profile.")
     gflags.DEFINE_string("branch_name", "", "")
     gflags.DEFINE_string("sha", "", "")
     gflags.DEFINE_boolean("print_tree", False, "Print trees to file.")
@@ -598,14 +577,10 @@ if __name__ == '__main__':
     gflags.DEFINE_enum("model_type", "CBOW",
                        ["CBOW", "RNN", "SPINN", "NTI"],
                        "")
-    gflags.DEFINE_boolean("allow_gt_transitions_in_eval", False,
-        "Whether to use ground truth transitions in evaluation when appropriate "
-        "(i.e., in Model 1 and Model 2S.)")
     gflags.DEFINE_integer("gpu", -1, "")
     gflags.DEFINE_integer("model_dim", 8, "")
     gflags.DEFINE_integer("mlp_dim", 1024, "")
     gflags.DEFINE_integer("word_embedding_dim", 8, "")
-    gflags.DEFINE_float("y_lambda", 1.0, "Linear scale for classification loss.")
     gflags.DEFINE_float("transition_weight", None, "")
     gflags.DEFINE_integer("tracking_lstm_hidden_dim", 4, "")
     gflags.DEFINE_boolean("use_reinforce", False, "Use RL to provide tracking lstm gradients")
@@ -625,8 +600,6 @@ if __name__ == '__main__':
         "Used for dropout in the semantic task classifier.")
     gflags.DEFINE_float("embedding_keep_rate", 1.0,
         "Used for dropout on transformed embeddings.")
-    gflags.DEFINE_boolean("use_random", False, "When predicting parse, rather than logits,"
-        "use a uniform distribution over actions.")
     gflags.DEFINE_boolean("use_input_norm", False, "Apply batch normalization to transformed embeddings.")
     gflags.DEFINE_float("tracker_keep_rate", 1.0, "Keep rate for tracker input dropout.")
     gflags.DEFINE_integer("num_mlp_layers", 2, "")
@@ -660,9 +633,6 @@ if __name__ == '__main__':
         "If set, a checkpoint is loaded and a forward pass is done to get the predicted "
         "transitions. The inferred parses are written to the supplied file(s) along with example-"
         "by-example accuracy information. Requirements: Must specify checkpoint path.")
-    gflags.DEFINE_string("eval_output_paths", None,
-        "Used when expanded_eval_only_mode is set. The number of supplied paths should be same"
-        "as the number of eval sets.")
     gflags.DEFINE_boolean("write_predicted_label", False,
         "Write the predicted labels in a <eval_output_name>.lbl file.")
 

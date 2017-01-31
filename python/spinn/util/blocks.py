@@ -43,7 +43,7 @@ class BaseSentencePairTrainer(object):
 
     def forward(self, x_batch, y_batch=None, train=True,
                 use_reinforce=False, rl_style="zero-one", rl_baseline="ema",
-                use_internal_parser=False, validate_transitions=True, use_random=False):
+                use_internal_parser=False, validate_transitions=True):
         assert "sentences" in x_batch and "transitions" in x_batch, \
             "Input must contain dictionary of sentences and transitions."
 
@@ -60,7 +60,7 @@ class BaseSentencePairTrainer(object):
 
         ret = self.model(sentences, transitions, y_batch, train=train,
             use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline,
-            use_internal_parser=use_internal_parser, validate_transitions=validate_transitions, use_random=use_random)
+            use_internal_parser=use_internal_parser, validate_transitions=validate_transitions)
         y = ret[0]
         return ret
 
