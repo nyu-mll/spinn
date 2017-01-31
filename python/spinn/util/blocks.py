@@ -14,6 +14,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
+def fancy_index(var, index):
+    index_mask = index.view(-1, 1).repeat(1, var.size(1))
+    mask = torch.range(0, var.size(1) - 1).long()
+    mask = mask.repeat(var.size(0), 1)
+    mask = mask.eq(index_mask)
+    return var[mask]
+
+
 def HeKaimingInit(shape, real_shape=None):
     # Calculate fan-in / fan-out using real shape if given as override
     fan = real_shape or shape

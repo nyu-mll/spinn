@@ -14,7 +14,7 @@ import torch.optim as optim
 
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle
-from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims
+from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, fancy_index
 from spinn.util.blocks import var_mean, get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
@@ -598,7 +598,7 @@ class BaseModel(nn.Module):
             rewards = self.build_rewards(y, y_batch, rl_style)
 
             if rl_baseline == "ema": # Exponential Moving Average
-                self.baseline = self.baseline * (1 - self.mu) + self.mu * np.mean(rewards)
+                self.baseline = self.baseline * (1 - self.mu) + self.mu * rewards.mean()
                 self.avg_baseline = self.baseline
                 new_rewards = rewards - self.baseline
             elif rl_baseline == "policy": # Policy Net
@@ -651,7 +651,7 @@ class BaseModel(nn.Module):
                         F.softmax_cross_entropy(logits[i:(i+1)], y[i:(i+1)]), axis=0)
                         for i in range(y.shape[0])], axis=0).data
         elif style == "zero-one":
-            rewards = (F.argmax(logits, axis=1).data == y).astype(np.float32)
+            rewards = torch.eq(logits.max(1)[1].data, y).float()
         else:
             raise Exception("Not implemented")
         return rewards
@@ -689,21 +689,21 @@ class BaseModel(nn.Module):
         """
         hyp_acc, truth_acc, hyp_xent, truth_xent = self.spinn.get_statistics()
         log_p = F.log_softmax(hyp_xent)
-        log_p_preds = F.select_item(log_p, truth_xent)
+        log_p_preds = fancy_index(log_p, torch.from_numpy(truth_xent))
 
         if self.use_sentence_pair:
             # Handles the case of SNLI where each reward is used for two sentences.
-            rewards = np.concatenate([rewards, rewards], axis=0)
+            rewards = torch.cat([rewards, rewards], 0)
         else:
-            assert self.spinn.transition_mask.shape[0] == rewards.shape[0]
+            assert self.spinn.transition_mask.shape[0] == rewards.size(0)
 
         # Expand rewards
         if self.spinn.use_skips:
-            rewards = expand_along(rewards, np.full(self.spinn.transition_mask.shape, True))
+            rewards = expand_along(rewards.view(-1).numpy(), np.full(self.spinn.transition_mask.shape, True))
         else:
-            rewards = expand_along(rewards, self.spinn.transition_mask)
+            rewards = expand_along(rewards.view(-1).numpy(), self.spinn.transition_mask)
 
-        rl_loss = F.sum(-1. * log_p_preds * rewards) / log_p_preds.shape[0]
+        rl_loss = -1. * torch.dot(log_p_preds, Variable(torch.from_numpy(rewards), volatile=not self.training)) / log_p_preds.size(0)
 
         return rl_loss
 
