@@ -14,7 +14,7 @@ import torch.optim as optim
 
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle
-from spinn.util.blocks import treelstm, expand_along, dropout
+from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims
 from spinn.util.blocks import var_mean, get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
@@ -340,12 +340,13 @@ class SPINN(nn.Module):
             # have different sizes when not using skips.
             hyp_acc, truth_acc, hyp_xent, truth_xent = self.get_statistics()
 
-            transition_acc = F.accuracy(
-                hyp_acc, truth_acc.astype(np.int32))
+            t_pred = hyp_acc.argmax(axis=1)
+            transition_acc = np.asarray((t_pred == truth_acc).mean(dtype=np.float32))
 
-            transition_loss = F.softmax_cross_entropy(
-                hyp_xent, truth_acc.astype(np.int32),
-                normalize=False)
+            transition_logits = F.log_softmax(hyp_xent)
+            transition_y = torch.from_numpy(truth_acc.astype(np.int32)).long()
+            transition_loss = F.nll_loss(
+                transition_logits, Variable(transition_y, volatile=not train))
 
             transition_loss *= self.transition_weight
         else:
@@ -379,7 +380,7 @@ class SPINN(nn.Module):
             for m in self.memories])
 
         statistics = [
-            torch.squeeze(torch.cat([F.expand_dims(ss, 1) for ss in s], 0))
+            torch.squeeze(torch.cat([expand_dims(ss, 1) for ss in s], 0))
             if isinstance(s[0], Variable) else
             np.array(reduce(lambda x, y: x + y.tolist(), s, []))
             for s in statistics]
@@ -652,7 +653,7 @@ class BaseModel(nn.Module):
 
     def build_rewards(self, logits, y, style="zero-one"):
         if style == "xent":
-            rewards = -1. * F.concat([F.expand_dims(
+            rewards = -1. * F.concat([expand_dims(
                         F.softmax_cross_entropy(logits[i:(i+1)], y[i:(i+1)]), axis=0)
                         for i in range(y.shape[0])], axis=0).data
         elif style == "zero-one":
