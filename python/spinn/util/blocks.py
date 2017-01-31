@@ -106,6 +106,12 @@ def dropout(inp, ratio, train):
     return inp
 
 
+def expand_dims(var, dim=0):
+    sizes = list(var.size())
+    sizes.insert(dim, 1)
+    return var.view(*sizes)
+
+
 def expand_along(rewards, tr_mask):
     assert isinstance(rewards, np.ndarray)
     mask = np.extract(tr_mask, np.tile(np.arange(tr_mask.shape[0]), (tr_mask.shape[1], 1)).T)
