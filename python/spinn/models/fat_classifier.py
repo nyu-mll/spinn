@@ -94,6 +94,13 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
     evalb_parses = []
     parses = []
     for i, (eval_X_batch, eval_transitions_batch, eval_y_batch, eval_num_transitions_batch) in enumerate(eval_set[1]):
+        eval_X_batch = torch.from_numpy(eval_X_batch).long()
+        eval_y_batch = torch.from_numpy(eval_y_batch).long()
+
+        if FLAGS.gpu >= 0:
+            eval_X_batch, eval_y_batch = eval_X_batch.cuda(), eval_y_batch.cuda()
+
+
         # Calculate Local Accuracies
         if eval_data_limit == -1 or i < eval_data_limit:
             start = time.time()
@@ -108,7 +115,7 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
             y, loss, class_acc, transition_acc, transition_loss, rl_loss = ret
             end = time.time()
             acc_value = class_acc
-            accum_time.append((end - start) / float(eval_y_batch.shape[0]))
+            accum_time.append((end - start) / float(eval_y_batch.size(0)))
 
             if transition_loss is not None:
                 preds = [m["preds_cm"] for m in model.spinn.memories]
