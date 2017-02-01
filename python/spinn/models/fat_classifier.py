@@ -357,6 +357,10 @@ def run(only_forward=False):
     if FLAGS.gpu >= 0:
         model.cuda()
 
+    def set_device(self):
+        self.gpu = FLAGS.gpu
+    model.apply(set_device)
+
     def prod(l):
         return reduce(lambda x, y: x * y, l, 1.0)
     total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])

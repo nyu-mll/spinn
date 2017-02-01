@@ -28,6 +28,12 @@ T_REDUCE = 1
 T_SKIP   = 2
 
 
+def to_cuda(var, gpu):
+    if gpu >= 0:
+        return var.cuda()
+    return var
+
+
 class SentencePairTrainer(BaseSentencePairTrainer):
     def init_params(self, **kwargs):
         raise NotImplementedError()
@@ -152,9 +158,9 @@ class Tracker(nn.Module):
 
     def __call__(self, bufs, stacks, train):
         self.batch_size = len(bufs)
-        zeros = Variable(torch.from_numpy(
+        zeros = Variable(to_cuda(torch.from_numpy(
             np.zeros(bufs[0][0].size(), dtype=np.float32),
-            ), volatile=not train)
+            ), self.gpu), volatile=not train)
         buf = bundle(buf[-1] for buf in bufs)
         stack1 = bundle(stack[-1] if len(stack) > 0 else zeros for stack in stacks)
         stack2 = bundle(stack[-2] if len(stack) > 1 else zeros for stack in stacks)
@@ -163,14 +169,14 @@ class Tracker(nn.Module):
         lstm_in += self.stack1(stack1.h)
         lstm_in += self.stack2(stack2.h)
         if self.c is None:
-            self.c = Variable(torch.from_numpy(
+            self.c = Variable(to_cuda(torch.from_numpy(
                 np.zeros((self.batch_size, self.state_size),
-                              dtype=np.float32)),
+                              dtype=np.float32)), self.gpu),
                 volatile=not train)
         if self.h is None:
-            self.h = Variable(torch.from_numpy(
+            self.h = Variable(to_cuda(torch.from_numpy(
                 np.zeros((self.batch_size, self.state_size),
-                              dtype=np.float32)),
+                              dtype=np.float32)), self.gpu),
                 volatile=not train)
 
         # TODO: Tracker dropout.
@@ -314,8 +320,8 @@ class SPINN(nn.Module):
                             lr.append(stack.pop())
                         else:
                             # TODO: This only happens in SNLI eval for some reason...
-                            zeros = Variable(torch.from_numpy(np.zeros(buf[0].size(),
-                                dtype=np.float32)),
+                            zeros = Variable(to_cuda(torch.from_numpy(np.zeros(buf[0].size(),
+                                dtype=np.float32)), self.gpu),
                                 volatile=not train)
                             lr.append(zeros)
                     trackings.append(tracking)
@@ -339,7 +345,7 @@ class SPINN(nn.Module):
             transition_acc = np.asarray((t_pred == truth_acc).mean(dtype=np.float32))
 
             transition_logits = F.log_softmax(hyp_xent)
-            transition_y = torch.from_numpy(truth_acc.astype(np.int32)).long()
+            transition_y = to_cuda(torch.from_numpy(truth_acc.astype(np.int32)).long(), self.gpu)
             transition_loss = F.nll_loss(
                 transition_logits, Variable(transition_y, volatile=not train))
 
@@ -490,7 +496,7 @@ class BaseModel(nn.Module):
         else:
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
-        
+
         if project_embeddings:
             self.project = nn.Linear(word_embedding_dim, model_dim)
         else:
@@ -544,7 +550,7 @@ class BaseModel(nn.Module):
         emb = self._embed(example.tokens.view(-1))
         emb = dropout(emb, self.embedding_dropout_rate, train)
         emb = self.project(emb)
-        
+
         # Fancy Projection. Only use input embeddings as state.h. (disabled)
         # emb = get_state(h=emb, c=Variable(
         #     torch.from_numpy(np.zeros(emb.size(), dtype=np.float32)),
