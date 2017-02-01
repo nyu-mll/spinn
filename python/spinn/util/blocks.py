@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import math
 import six
 
 from functools import partial
@@ -15,6 +16,39 @@ import torch.optim as optim
 
 
 
+def HeKaimingInit(var):
+    fan = var.size()
+    weight = torch.from_numpy(np.random.normal(scale=np.sqrt(4.0/(fan[0] + fan[1])),
+        size=fan).astype(np.float32))
+    var.data.set_(weight)
+
+
+def UniformInitializer(var, range):
+    var.data.uniform_(-range, range)
+
+
+def ZeroInitializer(var):
+    var.data.fill_(0)
+
+
+def StDevClosure(var):
+    return [1. / math.sqrt(var.weight.size(1))]
+
+
+def EmptyClosure(var):
+    return []
+
+
+def Linear(in_features, out_features, bias=True, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
+    class _Linear(nn.Linear):
+        def reset_parameters(self):
+            config = closure(self)
+            initializer(self.weight, *config)
+            if self.bias is not None:
+                bias_initializer(self.bias, *config)
+    return _Linear(in_features, out_features, bias)
+
+
 def to_cuda(var, gpu):
     if gpu >= 0:
         return var.cuda()
@@ -22,20 +56,11 @@ def to_cuda(var, gpu):
 
 
 def select_item(var, index, gpu=-1):
-    # import ipdb; ipdb.set_trace()
     index_mask = index.view(-1, 1).repeat(1, var.size(1))
     mask = to_cuda(torch.range(0, var.size(1) - 1).long(), gpu)
     mask = mask.repeat(var.size(0), 1)
     mask = mask.eq(index_mask)
     return torch.masked_select(var, Variable(mask, volatile=var.volatile))
-
-
-def HeKaimingInit(shape, real_shape=None):
-    # Calculate fan-in / fan-out using real shape if given as override
-    fan = real_shape or shape
-
-    return np.random.normal(scale=np.sqrt(4.0/(fan[0] + fan[1])),
-                            size=shape)
 
 
 class BaseSentencePairTrainer(object):

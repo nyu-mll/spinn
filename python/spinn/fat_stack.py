@@ -16,7 +16,9 @@ from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle, to_cuda
 from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
 from spinn.util.blocks import var_mean, get_c, get_h, get_state
-from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
+from spinn.util.blocks import BaseSentencePairTrainer
+from spinn.util.blocks import Linear
+from spinn.util.blocks import HeKaimingInit, ZeroInitializer
 
 from sklearn import metrics
 
@@ -333,11 +335,13 @@ class MLP(nn.Module):
 
         features_dim = mlp_input_dim
         for i in range(num_mlp_layers):
-            setattr(self, 'l{}'.format(i), nn.Linear(features_dim, mlp_dim))
+            setattr(self, 'l{}'.format(i), Linear(features_dim, mlp_dim,
+                initializer=HeKaimingInit))
             if mlp_bn:
                 setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
             features_dim = mlp_dim
-        setattr(self, 'l{}'.format(num_mlp_layers), nn.Linear(features_dim, num_classes))
+        setattr(self, 'l{}'.format(num_mlp_layers), Linear(features_dim, num_classes,
+                initializer=HeKaimingInit))
 
     def forward(self, h, train):
         for i in range(self.num_mlp_layers):
@@ -431,7 +435,7 @@ class BaseModel(nn.Module):
             self._embed.weight.requires_grad = True
 
         if project_embeddings and not self.use_encode:
-            self.project = nn.Linear(word_embedding_dim, model_dim)
+            self.project = Linear(word_embedding_dim, model_dim, initializer=HeKaimingInit)
         else:
             self.project = lambda x: x
 
