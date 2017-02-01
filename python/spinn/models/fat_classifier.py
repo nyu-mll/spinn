@@ -632,7 +632,7 @@ if __name__ == '__main__':
     # Optimization settings.
     gflags.DEFINE_integer("training_steps", 500000, "Stop training after this point.")
     gflags.DEFINE_integer("batch_size", 32, "SGD minibatch size.")
-    gflags.DEFINE_enum("opt", "RMSProp", ["RMSProp", "Adam"], "Specify optimization method.")
+    gflags.DEFINE_enum("opt", "RMSprop", ["RMSprop", "Adam"], "Specify optimization method.")
     gflags.DEFINE_boolean("use_lr_decay", True, "Used in RMSProp.")
     gflags.DEFINE_float("learning_rate", 0.001, "Used in RMSProp.")
     gflags.DEFINE_float("learning_rate_decay_per_10k_steps", 0.75, "Used in RMSProp.")

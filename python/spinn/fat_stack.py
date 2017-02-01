@@ -38,9 +38,14 @@ class SentencePairTrainer(BaseSentencePairTrainer):
     def init_params(self, **kwargs):
         raise NotImplementedError()
 
-    def init_optimizer(self, lr=0.01, l2_lambda=0.0, **kwargs):
+    def init_optimizer(self, lr=0.01, l2_lambda=0.0, opt="RMSprop", **kwargs):
         relevant_params = [w for w in self.model.parameters() if w.requires_grad]
-        self.optimizer = optim.Adam(relevant_params, lr=lr, betas=(0.9, 0.999), weight_decay=l2_lambda)
+        if opt == "RMSprop":
+            self.optimizer = optim.RMSprop(relevant_params, lr=lr, alpha=0.9, weight_decay=l2_lambda)
+        elif opt == "Adam":
+            self.optimizer = optim.Adam(relevant_params, lr=lr, betas=(0.9, 0.999), weight_decay=l2_lambda)
+        else:
+            raise NotImplementedError()
 
 
 class SentenceTrainer(SentencePairTrainer):
