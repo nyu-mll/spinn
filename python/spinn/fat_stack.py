@@ -14,7 +14,7 @@ import torch.optim as optim
 
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle
-from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, fancy_index
+from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
 from spinn.util.blocks import var_mean, get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
@@ -689,7 +689,7 @@ class BaseModel(nn.Module):
         """
         hyp_acc, truth_acc, hyp_xent, truth_xent = self.spinn.get_statistics()
         log_p = F.log_softmax(hyp_xent)
-        log_p_preds = fancy_index(log_p, torch.from_numpy(truth_xent))
+        log_p_preds = select_item(log_p, torch.from_numpy(truth_xent))
 
         if self.use_sentence_pair:
             # Handles the case of SNLI where each reward is used for two sentences.
@@ -703,7 +703,7 @@ class BaseModel(nn.Module):
         else:
             rewards = expand_along(rewards.view(-1).numpy(), self.spinn.transition_mask)
 
-        rl_loss = -1. * torch.dot(log_p_preds, Variable(torch.from_numpy(rewards), volatile=not self.training)) / log_p_preds.size(0)
+        rl_loss = -1. * torch.dot(log_p_preds, Variable(torch.from_numpy(rewards), volatile=log_p_preds.volatile)) / log_p_preds.size(0)
 
         return rl_loss
 

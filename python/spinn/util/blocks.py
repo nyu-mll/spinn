@@ -14,12 +14,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-def fancy_index(var, index):
+def select_item(var, index):
     index_mask = index.view(-1, 1).repeat(1, var.size(1))
     mask = torch.range(0, var.size(1) - 1).long()
     mask = mask.repeat(var.size(0), 1)
     mask = mask.eq(index_mask)
-    return var[mask]
+    return torch.masked_select(var, Variable(mask, volatile=var.volatile))
 
 
 def HeKaimingInit(shape, real_shape=None):
