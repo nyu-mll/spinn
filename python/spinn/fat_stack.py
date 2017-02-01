@@ -471,6 +471,7 @@ class BaseModel(nn.Module):
         self.embedding_dropout_rate = 1. - embedding_keep_rate
         self.word_embedding_dim = word_embedding_dim
         self.use_encode = use_encode
+        self.bi_encode = True
         self.transition_weight = transition_weight
 
         args = {
@@ -497,14 +498,17 @@ class BaseModel(nn.Module):
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
 
-        if project_embeddings:
+        if project_embeddings and not self.use_encode:
             self.project = nn.Linear(word_embedding_dim, model_dim)
         else:
             self.project = lambda x: x
 
-        # TODO: Add encoding layer.
         if self.use_encode:
-            raise NotImplementedError()
+            bi = 2 if self.bi_encode else 1
+            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, 1,
+                batch_first=True,
+                bidirectional=self.bi_encode,
+                )
 
         self.spinn = SPINN(args, vocab, use_skips=use_skips)
 
@@ -543,29 +547,35 @@ class BaseModel(nn.Module):
         return h
 
 
-    def run_embed(self, example, train):
-        batch_size, seq_length = example.tokens.size()
+    def run_embed(self, tokens, train):
+        return self._embed(tokens)
 
-        # Embed all tokens.
-        emb = self._embed(example.tokens.view(-1))
-        emb = dropout(emb, self.embedding_dropout_rate, train)
-        emb = self.project(emb)
 
-        # Fancy Projection. Only use input embeddings as state.h. (disabled)
-        # emb = get_state(h=emb, c=Variable(
-        #     torch.from_numpy(np.zeros(emb.size(), dtype=np.float32)),
-        #     volatile=not train)
-        #     )
+    def run_encode(self, x, train):
+        batch_size, seq_len, model_dim = x.size()
 
-        # TODO: Add batch norm?
+        num_layers = 1
+        bidirectional = self.bi_encode
+        bi = 2 if bidirectional else 1
+        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
+        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
 
+        # Expects (input, h_0, c_0):
+        #   input => seq_len x batch_size x model_dim
+        #   h_0   => (num_layers x bi[1,2]) x batch_size x model_dim
+        #   c_0   => (num_layers x bi[1,2]) x batch_size x model_dim
+        output, (hn, cn) = self.encode(x, (h0, c0))
+
+        return output
+
+
+    def build_buffers(self, emb, batch_size, seq_length):
         # Split twice:
         # 1. (#batch_size x #seq_length, #embed_dim) => [(#seq_length, #embed_dim)] x #batch_size
         # 2. (#seq_length, #embed_dim) => [(1, #embed_dim)] x #seq_length
         emb = [torch.chunk(x, seq_length, 0) for x in torch.chunk(emb, batch_size, 0)]
         buffers = [list(reversed(x)) for x in emb]
-        example.tokens = buffers
-        return example
+        return buffers
 
 
     def run_spinn(self, example, train, use_internal_parser,
@@ -585,8 +595,31 @@ class BaseModel(nn.Module):
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema",
                  use_internal_parser=False, validate_transitions=True):
         example = self.build_example(sentences, transitions, train)
-        example_embed = self.run_embed(example, train)
-        h, transition_acc, transition_loss = self.run_spinn(example_embed, train, use_internal_parser,
+
+        tokens = example.tokens
+
+        emb = self.run_embed(tokens, train)
+        emb = dropout(emb, self.embedding_dropout_rate, train)
+
+        batch_size, seq_length, _ = emb.size()
+
+        if self.use_encode:
+            emb = self.run_encode(emb, train)
+            # Flatten after.
+            # TODO: Would expect output to be contiguous, but it isn't.
+            # Reported on pytorch forum:
+            # https://discuss.pytorch.org/t/output-of-rnn-is-not-contiguous/298
+            emb = emb.contiguous().view(-1, self.model_dim)
+        else:
+            # Flatten first.
+            emb = emb.view(-1, self.word_embedding_dim)
+            emb = self.project(emb)
+
+        buffers = self.build_buffers(emb, batch_size, seq_length)
+
+        example.tokens = buffers
+
+        h, transition_acc, transition_loss = self.run_spinn(example, train, use_internal_parser,
             validate_transitions, use_reinforce=use_reinforce, rl_style=rl_style, rl_baseline=rl_baseline)
         h = self.build_h(h)
         y = self.mlp(h, train)

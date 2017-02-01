@@ -125,9 +125,10 @@ class BaseModel(nn.Module):
         h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
         c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
 
-        # Expects (input, h_0):
+        # Expects (input, h_0, c_0):
         #   input => seq_len x batch_size x model_dim
-        #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
+        #   h_0   => (num_layers x bi[1,2]) x batch_size x model_dim
+        #   c_0   => (num_layers x bi[1,2]) x batch_size x model_dim
         output, (hn, cn) = self.encode(x, (h0, c0))
 
         return output
