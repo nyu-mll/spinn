@@ -54,7 +54,7 @@ class BaseModel(nn.Module):
 
         self.model_dim = model_dim
         self.use_encode = use_encode
-        self.bi_encode = False
+        self.bi_encode = True
 
         if initial_embeddings is not None:
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
@@ -69,7 +69,8 @@ class BaseModel(nn.Module):
         assert word_embedding_dim == model_dim, "Currently only supports word_embedding_dim == model_dim"
 
         if use_encode:
-            self.encode = nn.LSTM(word_embedding_dim, model_dim, 1,
+            bi = 2 if self.bi_encode else 1
+            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, 1,
                 # batch_first=True,
                 bidirectional=self.bi_encode,
                 )
@@ -126,8 +127,8 @@ class BaseModel(nn.Module):
         num_layers = 1
         bidirectional = self.bi_encode
         bi = 2 if bidirectional else 1
-        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
-        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
+        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
+        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
 
         # Transforms x
         #   from  => batch_size x seq_len x model_dim
