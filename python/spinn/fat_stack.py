@@ -28,6 +28,20 @@ T_REDUCE = 1
 T_SKIP   = 2
 
 
+"""
+TODO:
+
+- [ ] Weight Initialization
+    - [ ] Projection
+    - [ ] Encoding
+    - [ ] Reduce
+    - [ ] Transition
+    - [ ] MLP
+- [ ] Gradient Clipping
+
+"""
+
+
 class SentencePairTrainer(BaseSentencePairTrainer):
     def init_optimizer(self, lr=0.01, l2_lambda=0.0, opt="RMSprop", **kwargs):
         relevant_params = [w for w in self.model.parameters() if w.requires_grad]
