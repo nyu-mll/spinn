@@ -71,11 +71,11 @@ class BaseModel(nn.Module):
         if use_encode:
             bi = 2 if self.bi_encode else 1
             self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, 1,
-                # batch_first=True,
+                batch_first=True,
                 bidirectional=self.bi_encode,
                 )
 
-        self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1)
+        self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1, batch_first=True)
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else model_dim
         
@@ -109,11 +109,6 @@ class BaseModel(nn.Module):
         h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
         c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
 
-        # Transforms x
-        #   from  => batch_size x seq_len x model_dim
-        #   to    => seq_len x batch_size x model_dim
-        x = torch.transpose(x, 0, 1)
-
         # Expects (input, h_0):
         #   input => seq_len x batch_size x model_dim
         #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
@@ -130,16 +125,10 @@ class BaseModel(nn.Module):
         h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
         c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
 
-        # Transforms x
-        #   from  => batch_size x seq_len x model_dim
-        #   to    => seq_len x batch_size x model_dim
-        x = torch.transpose(x, 0, 1)
-
         # Expects (input, h_0):
         #   input => seq_len x batch_size x model_dim
         #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
         output, (hn, cn) = self.encode(x, (h0, c0))
-        output = torch.transpose(output, 0, 1)
 
         return output
 
