@@ -262,13 +262,13 @@ class SPINN(nn.Module):
                         if use_reinforce:
                             probas = F.softmax(transition_hyp)
                             samples = np.array([T_SKIP for _ in self.bufs], dtype=np.int32)
-                            samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data.numpy()[cant_skip]]
+                            samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data.cpu().numpy()[cant_skip]]
 
                             transition_preds = samples
                             hyp_acc = probas
                             truth_xent = samples
                         else:
-                            transition_preds = transition_hyp.data.numpy().argmax(axis=1)
+                            transition_preds = transition_hyp.data.cpu().numpy().argmax(axis=1)
                             hyp_acc = transition_hyp
                             truth_xent = transitions
 
@@ -280,7 +280,7 @@ class SPINN(nn.Module):
                         memory["preds"]  = transition_preds
 
                         if not self.use_skips:
-                            hyp_acc = hyp_acc.data.numpy()[cant_skip]
+                            hyp_acc = hyp_acc.data.cpu().numpy()[cant_skip]
                             truth_acc = truth_acc[cant_skip]
 
                             cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
@@ -695,7 +695,7 @@ class BaseModel(nn.Module):
         """
         hyp_acc, truth_acc, hyp_xent, truth_xent = self.spinn.get_statistics()
         log_p = F.log_softmax(hyp_xent)
-        log_p_preds = select_item(log_p, torch.from_numpy(truth_xent))
+        log_p_preds = select_item(log_p, to_cuda(torch.from_numpy(truth_xent), self.gpu), self.gpu)
 
         if self.use_sentence_pair:
             # Handles the case of SNLI where each reward is used for two sentences.
@@ -705,11 +705,11 @@ class BaseModel(nn.Module):
 
         # Expand rewards
         if self.spinn.use_skips:
-            rewards = expand_along(rewards.view(-1).numpy(), np.full(self.spinn.transition_mask.shape, True))
+            rewards = expand_along(rewards.view(-1).cpu().numpy(), np.full(self.spinn.transition_mask.shape, True))
         else:
-            rewards = expand_along(rewards.view(-1).numpy(), self.spinn.transition_mask)
+            rewards = expand_along(rewards.view(-1).cpu().numpy(), self.spinn.transition_mask)
 
-        rl_loss = -1. * torch.dot(log_p_preds, Variable(torch.from_numpy(rewards), volatile=log_p_preds.volatile)) / log_p_preds.size(0)
+        rl_loss = -1. * torch.dot(log_p_preds, Variable(to_cuda(torch.from_numpy(rewards), self.gpu), volatile=log_p_preds.volatile)) / log_p_preds.size(0)
 
         return rl_loss
 

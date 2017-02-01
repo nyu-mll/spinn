@@ -14,9 +14,17 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-def select_item(var, index):
+
+def to_cuda(var, gpu):
+    if gpu >= 0:
+        return var.cuda()
+    return var
+
+
+def select_item(var, index, gpu=-1):
+    # import ipdb; ipdb.set_trace()
     index_mask = index.view(-1, 1).repeat(1, var.size(1))
-    mask = torch.range(0, var.size(1) - 1).long()
+    mask = to_cuda(torch.range(0, var.size(1) - 1).long(), gpu)
     mask = mask.repeat(var.size(0), 1)
     mask = mask.eq(index_mask)
     return torch.masked_select(var, Variable(mask, volatile=var.volatile))
