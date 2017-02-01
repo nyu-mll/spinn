@@ -15,7 +15,7 @@ import torch.optim as optim
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle, to_cuda
 from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
-from spinn.util.blocks import var_mean, get_c, get_h, get_state
+from spinn.util.blocks import get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
 from spinn.util.blocks import Linear, LSTM, LSTMCell
 from spinn.util.blocks import HeKaimingInit, ZeroInitializer

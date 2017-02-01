@@ -344,6 +344,7 @@ def run(only_forward=False):
         )
 
     model = classifier_trainer.model
+    optimizer = classifier_trainer.optimizer
 
     if FLAGS.gpu >= 0:
         model.cuda()
@@ -454,6 +455,15 @@ def run(only_forward=False):
 
             # Get gradients
             total_loss.backward()
+
+            # Hard Gradient Clipping
+            clip = FLAGS.clipping_max_value
+            for p in model.parameters():
+                if p.requires_grad:
+                    p.grad.data.clamp_(min=-clip, max=clip)
+
+            # Learning Rate Decay
+            optimizer.lr = FLAGS.learning_rate * (FLAGS.learning_rate_decay_per_10k_steps ** (step / 10000.0))
 
             # Apply gradients
             classifier_trainer.update()
