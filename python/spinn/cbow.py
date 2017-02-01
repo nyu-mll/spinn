@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-from spinn.util.pytorch_blocks import BaseSentencePairTrainer, HeKaimingInit
+from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
