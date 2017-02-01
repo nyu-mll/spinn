@@ -557,8 +557,8 @@ class BaseModel(nn.Module):
         num_layers = 1
         bidirectional = self.bi_encode
         bi = 2 if bidirectional else 1
-        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
-        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
+        h0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), self.gpu), volatile=not train)
+        c0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), self.gpu), volatile=not train)
 
         # Expects (input, h_0, c_0):
         #   input => seq_len x batch_size x model_dim
@@ -606,9 +606,6 @@ class BaseModel(nn.Module):
         if self.use_encode:
             emb = self.run_encode(emb, train)
             # Flatten after.
-            # TODO: Would expect output to be contiguous, but it isn't.
-            # Reported on pytorch forum:
-            # https://discuss.pytorch.org/t/output-of-rnn-is-not-contiguous/298
             emb = emb.contiguous().view(-1, self.model_dim)
         else:
             # Flatten first.

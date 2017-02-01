@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
+from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit, to_cuda
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
@@ -78,7 +78,7 @@ class BaseModel(nn.Module):
         self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1, batch_first=True)
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else model_dim
-        
+
         self.l0 = nn.Linear(mlp_input_dim, mlp_dim)
         self.l1 = nn.Linear(mlp_dim, mlp_dim)
         self.l2 = nn.Linear(mlp_dim, num_classes)
@@ -106,8 +106,8 @@ class BaseModel(nn.Module):
         num_layers = 1
         bidirectional = False
         bi = 2 if bidirectional else 1
-        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
-        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
+        h0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim), self.gpu), volatile=not train)
+        c0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim), self.gpu), volatile=not train)
 
         # Expects (input, h_0):
         #   input => seq_len x batch_size x model_dim
@@ -122,8 +122,8 @@ class BaseModel(nn.Module):
         num_layers = 1
         bidirectional = self.bi_encode
         bi = 2 if bidirectional else 1
-        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
-        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), volatile=not train)
+        h0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), self.gpu), volatile=not train)
+        c0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), self.gpu), volatile=not train)
 
         # Expects (input, h_0, c_0):
         #   input => seq_len x batch_size x model_dim
