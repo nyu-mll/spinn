@@ -17,7 +17,7 @@ from spinn.util.blocks import bundle, unbundle, to_cuda
 from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
 from spinn.util.blocks import var_mean, get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
-from spinn.util.blocks import Linear
+from spinn.util.blocks import Linear, LSTM, LSTMCell
 from spinn.util.blocks import HeKaimingInit, ZeroInitializer
 
 from sklearn import metrics
@@ -33,13 +33,14 @@ T_SKIP   = 2
 """
 TODO:
 
-- [ ] Weight Initialization
-    - [ ] Projection
-    - [ ] Encoding
-    - [ ] Reduce
-    - [ ] Transition
-    - [ ] MLP
+- [x] Weight Initialization
+    - [x] Projection
+    - [x] Encoding
+    - [x] Reduce
+    - [x] Transition
+    - [x] MLP
 - [ ] Gradient Clipping
+- [ ] Add GRU option for encoding layer and for tracker.
 
 """
 
@@ -59,30 +60,16 @@ class SentenceTrainer(SentencePairTrainer):
     pass
 
 
-# Fixes display bug in RNNCellBase.
-
-def __repr__(self):
-    s = '{name}({input_size}, {hidden_size}'
-    if 'bias' in self.__dict__ and self.bias is not True:
-        s += ', bias={bias}'
-    if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
-        s += ', nonlinearity={nonlinearity}'
-    s += ')'
-    return s.format(name=self.__class__.__name__, **self.__dict__)
-
-nn.LSTMCell.__repr__ = __repr__
-
-
 class Tracker(nn.Module):
 
     def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False):
         super(Tracker, self).__init__()
-        self.buf = nn.Linear(size, 4 * tracker_size, bias=False)
-        self.stack1 = nn.Linear(size, 4 * tracker_size, bias=False)
-        self.stack2 = nn.Linear(size, 4 * tracker_size, bias=False)
-        self.lstm = nn.LSTMCell(4 * tracker_size, tracker_size, bias=False)
+        self.buf = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+        self.stack1 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+        self.stack2 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+        self.lstm = LSTMCell(4 * tracker_size, tracker_size, bias=False, initializer=HeKaimingInit)
         if predict:
-            self.transition = nn.Linear(tracker_size, 3 if use_skips else 2)
+            self.transition = Linear(tracker_size, 3 if use_skips else 2, initializer=HeKaimingInit)
         self.state_size = tracker_size
         self.tracker_dropout_rate = tracker_dropout_rate
         self.reset_state()
@@ -441,9 +428,10 @@ class BaseModel(nn.Module):
 
         if self.use_encode:
             bi = 2 if self.bi_encode else 1
-            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, 1,
+            self.encode = LSTM(word_embedding_dim, model_dim / bi, 1,
                 batch_first=True,
                 bidirectional=self.bi_encode,
+                initializer=HeKaimingInit,
                 )
 
         self.spinn = SPINN(args, vocab, use_skips=use_skips)

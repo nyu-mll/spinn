@@ -40,13 +40,51 @@ def EmptyClosure(var):
 
 
 def Linear(in_features, out_features, bias=True, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
-    class _Linear(nn.Linear):
+    class Linear(nn.Linear):
         def reset_parameters(self):
             config = closure(self)
             initializer(self.weight, *config)
             if self.bias is not None:
                 bias_initializer(self.bias, *config)
-    return _Linear(in_features, out_features, bias)
+    return Linear(in_features, out_features, bias)
+
+
+
+def LSTM(input_size, hidden_size, num_layers=1, bias=True, batch_first=False, dropout=0, bidirectional=False,
+         closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
+    class LSTM(nn.LSTM):
+        def reset_parameters(self):
+            config = closure(self)
+            for weight in self.parameters():
+                if len(weight.size()) >= 2: # weight
+                    initializer(weight, *config)
+                else: # bias
+                    bias_initializer(weight, *config)
+    return LSTM(input_size, hidden_size, num_layers=num_layers, bias=bias,
+        batch_first=batch_first, dropout=dropout, bidirectional=bidirectional)
+
+
+def LSTMCell(input_size, hidden_size, bias=True, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
+    class LSTMCell(nn.LSTMCell):
+        def reset_parameters(self):
+            config = closure(self)
+            for weight in self.parameters():
+                if len(weight.size()) >= 2: # weight
+                    initializer(weight, *config)
+                else: # bias
+                    bias_initializer(weight, *config)
+
+        # Fixes display bug in RNNCellBase.
+        def __repr__(self):
+            s = '{name}({input_size}, {hidden_size}'
+            if 'bias' in self.__dict__ and self.bias is not True:
+                s += ', bias={bias}'
+            if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
+                s += ', nonlinearity={nonlinearity}'
+            s += ')'
+            return s.format(name=self.__class__.__name__, **self.__dict__)
+    return LSTMCell(input_size, hidden_size, bias=True)
+
 
 
 def to_cuda(var, gpu):
@@ -310,10 +348,10 @@ class Reduce(nn.Module):
 
     def __init__(self, size, tracker_size=None, use_tracking_in_composition=True):
         super(Reduce, self).__init__()
-        self.left = nn.Linear(size, 5 * size)
-        self.right = nn.Linear(size, 5 * size, bias=False)
+        self.left = Linear(size, 5 * size, initializer=HeKaimingInit)
+        self.right = Linear(size, 5 * size, bias=False, initializer=HeKaimingInit)
         if tracker_size is not None and use_tracking_in_composition:
-            self.track = nn.Linear(tracker_size, 5 * size, bias=False)
+            self.track = Linear(tracker_size, 5 * size, bias=False, initializer=HeKaimingInit)
 
     def __call__(self, left_in, right_in, tracking=None):
         """Perform batched TreeLSTM composition.
