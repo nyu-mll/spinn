@@ -8,23 +8,6 @@ import pytest
 
 from spinn import util
 from spinn.fat_stack import SPINN
-# from spinn.fat_stack import HardStack
-# from spinn.stack import ThinStack
-# from spinn.recurrences import Recurrence, Model0
-# from spinn.util import cuda, VariableStore, CropAndPad, IdentityLayer, batch_subgraph_gradients
-
-# Chainer imports
-import chainer
-from chainer import reporter, initializers
-from chainer import cuda, Function, gradient_check, report, training, utils, Variable
-from chainer import datasets, iterators, optimizers, serializers
-from chainer import Link, Chain, ChainList
-import chainer.functions as F
-from chainer.functions.connection import embed_id
-from chainer.functions.normalization.batch_normalization import batch_normalization
-from chainer.functions.evaluation import accuracy
-import chainer.links as L
-from chainer.training import extensions
 
 
 def default_args():

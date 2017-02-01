@@ -6,13 +6,6 @@ import time
 import math
 from collections import deque
 
-# Chainer Type Check is a major bottleneck for small networks,
-# sometimes giving more than 4x speedup by turning it off.
-# We turn type check off by default, but can set an env var to
-# turn it on if debugging.
-if os.environ.get('FORCE_CHAINER_TYPE_CHECK', '0') == '0':
-    os.environ['CHAINER_TYPE_CHECK'] = '0'
-
 import gflags
 import numpy as np
 
@@ -286,8 +279,6 @@ def run(only_forward=False):
         model_module = spinn.cbow
     elif FLAGS.model_type == "RNN":
         model_module = spinn.plain_rnn
-    elif FLAGS.model_type == "NTI":
-        raise NotImplementedError()
     elif FLAGS.model_type == "SPINN":
         model_module = spinn.fat_stack
     else:
@@ -595,7 +586,7 @@ if __name__ == '__main__':
 
     # Model architecture settings.
     gflags.DEFINE_enum("model_type", "CBOW",
-                       ["CBOW", "RNN", "SPINN", "NTI"],
+                       ["CBOW", "RNN", "SPINN"],
                        "")
     gflags.DEFINE_integer("gpu", -1, "")
     gflags.DEFINE_integer("model_dim", 8, "")
@@ -662,6 +653,9 @@ if __name__ == '__main__':
     if not torch.cuda.is_available():
         FLAGS.gpu = -1
 
+    if not FLAGS.model_type == "SPINN":
+        FLAGS.use_reinforce = False
+
     if not FLAGS.experiment_name:
         timestamp = str(int(time.time()))
         FLAGS.experiment_name = "{}-{}-{}".format(
@@ -669,9 +663,6 @@ if __name__ == '__main__':
             FLAGS.model_type,
             timestamp,
             )
-
-    if FLAGS.debug:
-        chainer.set_debug(True)
 
     if not FLAGS.branch_name:
         FLAGS.branch_name = os.popen('git rev-parse --abbrev-ref HEAD').read().strip()

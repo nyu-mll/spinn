@@ -115,7 +115,7 @@ class DataTestCase(unittest.TestCase):
         vocabulary = util.BuildVocabulary(
             raw_data, data_sets, embedding_data_path, logger=MockLogger(),
             sentence_pair_data=data_manager.SENTENCE_PAIR_DATA)
-        initial_embeddings = util.LoadEmbeddingsFromASCII(
+        initial_embeddings = util.LoadEmbeddingsFromText(
             vocabulary, word_embedding_dim, embedding_data_path)
         assert initial_embeddings.shape == (10, 5)
 
@@ -150,7 +150,7 @@ class SNLITestCase(unittest.TestCase):
         vocabulary = util.BuildVocabulary(
             raw_data, data_sets, embedding_data_path, logger=MockLogger(),
             sentence_pair_data=data_manager.SENTENCE_PAIR_DATA)
-        initial_embeddings = util.LoadEmbeddingsFromASCII(
+        initial_embeddings = util.LoadEmbeddingsFromText(
             vocabulary, word_embedding_dim, embedding_data_path)
 
         EOS_TOKEN = vocabulary["."]
@@ -214,7 +214,7 @@ class SSTTestCase(unittest.TestCase):
         vocabulary = util.BuildVocabulary(
             raw_data, data_sets, embedding_data_path, logger=MockLogger(),
             sentence_pair_data=data_manager.SENTENCE_PAIR_DATA)
-        initial_embeddings = util.LoadEmbeddingsFromASCII(
+        initial_embeddings = util.LoadEmbeddingsFromText(
             vocabulary, word_embedding_dim, embedding_data_path)
 
         EOS_TOKEN = vocabulary["."]
