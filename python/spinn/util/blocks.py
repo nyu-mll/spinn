@@ -55,11 +55,8 @@ class BaseSentencePairTrainer(object):
         assert "sentences" in x_batch and "transitions" in x_batch, \
             "Input must contain dictionary of sentences and transitions."
 
-        sentences =  torch.from_numpy(x_batch["sentences"]).long()
+        sentences =  x_batch["sentences"]
         transitions = x_batch["transitions"]
-
-        if y_batch is not None:
-            y_batch = torch.from_numpy(y_batch).long()
 
         if train:
             self.model.train()
@@ -294,7 +291,7 @@ class Reduce(nn.Module):
 
         The TreeLSTM has two or three inputs: the first two are the left and
         right children being composed; the third is the current state of the
-        tracker LSTM if one is present in the SPINN model. All are provided 
+        tracker LSTM if one is present in the SPINN model. All are provided
         as iterables and batched internally into tensors.
 
         Args:

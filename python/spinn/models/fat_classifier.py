@@ -136,7 +136,7 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
 
             if vocabulary is not None:
                 inv_vocab = {v: k for k, v in vocabulary.iteritems()}
-            
+
             for ii in range(len(eval_X_batch)):
                 sentence = eval_X_batch[ii]
                 ground_truth = eval_transitions_batch[ii]
@@ -347,6 +347,9 @@ def run(only_forward=False):
 
     model = classifier_trainer.model
 
+    if FLAGS.gpu >= 0:
+        model.cuda()
+
     def prod(l):
         return reduce(lambda x, y: x * y, l, 1.0)
     total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])
@@ -383,6 +386,12 @@ def run(only_forward=False):
             start = time.time()
 
             X_batch, transitions_batch, y_batch, _ = training_data_iter.next()
+
+            X_batch = torch.from_numpy(X_batch).long()
+            y_batch = torch.from_numpy(y_batch).long()
+
+            if FLAGS.gpu >= 0:
+                X_batch, y_batch = X_batch.cuda(), y_batch.cuda()
 
             # Reset cached gradients.
             classifier_trainer.reset()
@@ -448,7 +457,7 @@ def run(only_forward=False):
             classifier_trainer.update()
 
             end = time.time()
-            avg_time = (end - start) / float(y_batch.shape[0])
+            avg_time = (end - start) / float(y_batch.size(0))
             avg_train_time.append(avg_time)
 
             # Accumulate accuracy for current interval.
@@ -638,6 +647,9 @@ if __name__ == '__main__':
 
     # Parse command line flags.
     FLAGS(sys.argv)
+
+    if not torch.cuda.is_available():
+        FLAGS.gpu = -1
 
     if not FLAGS.experiment_name:
         timestamp = str(int(time.time()))
