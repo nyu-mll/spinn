@@ -39,52 +39,65 @@ def EmptyClosure(var):
     return []
 
 
-def Linear(in_features, out_features, bias=True, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
-    class Linear(nn.Linear):
-        def reset_parameters(self):
-            config = closure(self)
-            initializer(self.weight, *config)
-            if self.bias is not None:
-                bias_initializer(self.bias, *config)
-    return Linear(in_features, out_features, bias)
+class Linear(nn.Linear):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+        self.closure = closure
+        self.initializer = initializer
+        self.bias_initializer = bias_initializer
+        kwargs.pop('closure', None)
+        kwargs.pop('initializer', None)
+        kwargs.pop('bias_initializer', None)
+        super(Linear, self).__init__(input_size, hidden_size, **kwargs)
+    def reset_parameters(self):
+        config = self.closure(self)
+        self.initializer(self.weight, *config)
+        if self.bias is not None:
+            self.bias_initializer(self.bias, *config)
 
 
+class LSTM(nn.LSTM):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+        self.closure = closure
+        self.initializer = initializer
+        self.bias_initializer = bias_initializer
+        kwargs.pop('closure', None)
+        kwargs.pop('initializer', None)
+        kwargs.pop('bias_initializer', None)
+        super(LSTM, self).__init__(input_size, hidden_size, **kwargs)
+    def reset_parameters(self):
+        config = self.closure(self)
+        for weight in self.parameters():
+            if len(weight.size()) >= 2: # weight
+                self.initializer(weight, *config)
+            else: # bias
+                self.bias_initializer(weight, *config)
 
-def LSTM(input_size, hidden_size, num_layers=1, bias=True, batch_first=False, dropout=0, bidirectional=False,
-         closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
-    class LSTM(nn.LSTM):
-        def reset_parameters(self):
-            config = closure(self)
-            for weight in self.parameters():
-                if len(weight.size()) >= 2: # weight
-                    initializer(weight, *config)
-                else: # bias
-                    bias_initializer(weight, *config)
-    return LSTM(input_size, hidden_size, num_layers=num_layers, bias=bias,
-        batch_first=batch_first, dropout=dropout, bidirectional=bidirectional)
 
-
-def LSTMCell(input_size, hidden_size, bias=True, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer):
-    class LSTMCell(nn.LSTMCell):
-        def reset_parameters(self):
-            config = closure(self)
-            for weight in self.parameters():
-                if len(weight.size()) >= 2: # weight
-                    initializer(weight, *config)
-                else: # bias
-                    bias_initializer(weight, *config)
-
-        # Fixes display bug in RNNCellBase.
-        def __repr__(self):
-            s = '{name}({input_size}, {hidden_size}'
-            if 'bias' in self.__dict__ and self.bias is not True:
-                s += ', bias={bias}'
-            if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
-                s += ', nonlinearity={nonlinearity}'
-            s += ')'
-            return s.format(name=self.__class__.__name__, **self.__dict__)
-    return LSTMCell(input_size, hidden_size, bias=True)
-
+class LSTMCell(nn.LSTMCell):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+        self.closure = closure
+        self.initializer = initializer
+        self.bias_initializer = bias_initializer
+        kwargs.pop('closure', None)
+        kwargs.pop('initializer', None)
+        kwargs.pop('bias_initializer', None)
+        super(LSTMCell, self).__init__(input_size, hidden_size, **kwargs)
+    def reset_parameters(self):
+        config = self.closure(self)
+        for weight in self.parameters():
+            if len(weight.size()) >= 2: # weight
+                self.initializer(weight, *config)
+            else: # bias
+                self.bias_initializer(weight, *config)
+    # Fixes display bug in RNNCellBase.
+    def __repr__(self):
+        s = '{name}({input_size}, {hidden_size}'
+        if 'bias' in self.__dict__ and self.bias is not True:
+            s += ', bias={bias}'
+        if 'nonlinearity' in self.__dict__ and self.nonlinearity != "tanh":
+            s += ', nonlinearity={nonlinearity}'
+        s += ')'
+        return s.format(name=self.__class__.__name__, **self.__dict__)
 
 
 def to_cuda(var, gpu):

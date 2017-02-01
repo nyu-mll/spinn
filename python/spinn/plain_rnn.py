@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit, to_cuda
+from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit, to_cuda, Linear, LSTM
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
@@ -70,32 +70,22 @@ class BaseModel(nn.Module):
 
         if use_encode:
             bi = 2 if self.bi_encode else 1
-            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, 1,
+            self.encode = LSTM(word_embedding_dim, model_dim / bi, 1,
                 batch_first=True,
                 bidirectional=self.bi_encode,
+                initializer=HeKaimingInit,
                 )
 
         self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1, batch_first=True)
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else model_dim
 
-        self.l0 = nn.Linear(mlp_input_dim, mlp_dim)
-        self.l1 = nn.Linear(mlp_dim, mlp_dim)
-        self.l2 = nn.Linear(mlp_dim, num_classes)
+        self.l0 = Linear(mlp_input_dim, mlp_dim, initializer=HeKaimingInit)
+        self.l1 = Linear(mlp_dim, mlp_dim, initializer=HeKaimingInit)
+        self.l2 = Linear(mlp_dim, num_classes, initializer=HeKaimingInit)
 
-        self.init_params()
         print(self)
 
-
-    def init_params(self):
-        initrange = 0.1
-        for w in self.parameters():
-            if w.requires_grad:
-                print(w.size())
-                if len(w.size()) >= 2:
-                    w.data.set_(torch.from_numpy(HeKaimingInit(w.data.size())).float())
-                else:
-                    w.data.uniform_(-initrange, initrange)
 
     def embed(self, x, train):
         return self._embed(x)
