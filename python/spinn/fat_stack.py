@@ -156,7 +156,7 @@ class Tracker(nn.Module):
     def reset_state(self):
         self.c = self.h = None
 
-    def __call__(self, bufs, stacks, train):
+    def forward(self, bufs, stacks, train):
         self.batch_size = len(bufs)
         zeros = Variable(to_cuda(torch.from_numpy(
             np.zeros(bufs[0][0].size(), dtype=np.float32),
@@ -213,7 +213,7 @@ class SPINN(nn.Module):
         self.choices = np.array(choices, dtype=np.int32)
 
 
-    def __call__(self, example, train, print_transitions=False, use_internal_parser=False,
+    def forward(self, example, train, print_transitions=False, use_internal_parser=False,
                  validate_transitions=True,
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema"):
         self.bufs = example.tokens
@@ -591,7 +591,7 @@ class BaseModel(nn.Module):
         return h_both, transition_acc, transition_loss
 
 
-    def __call__(self, sentences, transitions, y_batch=None, train=True,
+    def forward(self, sentences, transitions, y_batch=None, train=True,
                  use_reinforce=False, rl_style="zero-one", rl_baseline="ema",
                  use_internal_parser=False, validate_transitions=True):
         example = self.build_example(sentences, transitions, train)
@@ -676,7 +676,7 @@ class BaseModel(nn.Module):
 
     def run_greedy_max(self, sentences, transitions, y_batch, train, rewards, rl_style):
         # TODO: Should this be run with train=False? Will effect batchnorm and dropout.
-        y, _, _, _, _ = self.__call__(sentences, transitions, y_batch=None, train=train, use_internal_parser=True)
+        y, _, _, _, _ = self.forward(sentences, transitions, y_batch=None, train=train, use_internal_parser=True)
         pred_reward = self.build_rewards(y, y_batch, rl_style)
         return pred_reward
 

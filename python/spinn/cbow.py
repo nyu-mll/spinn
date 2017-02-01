@@ -96,7 +96,7 @@ class BaseModel(nn.Module):
 
 
 class SentencePairModel(BaseModel):
-    def __call__(self, sentences, transitions, y_batch=None, train=True, **kwargs):
+    def forward(self, sentences, transitions, y_batch=None, train=True, **kwargs):
         batch_size, seq_length = sentences.size()[:2]
 
         # Build Tokens
@@ -121,7 +121,7 @@ class SentencePairModel(BaseModel):
 
 
 class SentenceModel(BaseModel):
-    def __call__(self, sentences, transitions, y_batch=None, train=True, **kwargs):
+    def forward(self, sentences, transitions, y_batch=None, train=True, **kwargs):
         batch_size, seq_length = sentences.size()
 
         # Build Tokens
