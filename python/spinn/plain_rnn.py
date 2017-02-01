@@ -53,6 +53,8 @@ class BaseModel(nn.Module):
         super(BaseModel, self).__init__()
 
         self.model_dim = model_dim
+        self.use_encode = use_encode
+        self.bi_encode = False
 
         if initial_embeddings is not None:
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
@@ -65,6 +67,12 @@ class BaseModel(nn.Module):
         # CBOW doesn't use model_dim right now. Let's leave this message here anyway for now, since
         # word_embedding_dim is effectively the model_dim.
         assert word_embedding_dim == model_dim, "Currently only supports word_embedding_dim == model_dim"
+
+        if use_encode:
+            self.encode = nn.LSTM(word_embedding_dim, model_dim, 1,
+                # batch_first=True,
+                bidirectional=self.bi_encode,
+                )
 
         self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1)
 
@@ -91,14 +99,14 @@ class BaseModel(nn.Module):
     def embed(self, x, train):
         return self._embed(x)
 
-    def run_rnn(self, x):
+    def run_rnn(self, x, train):
         batch_size, seq_len, model_dim = x.data.size()
 
         num_layers = 1
         bidirectional = False
         bi = 2 if bidirectional else 1
-        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim))
-        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim))
+        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
+        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
 
         # Transforms x
         #   from  => batch_size x seq_len x model_dim
@@ -111,6 +119,28 @@ class BaseModel(nn.Module):
         output, (hn, cn) = self.rnn(x, (h0, c0))
 
         return hn
+
+    def run_encode(self, x, train):
+        batch_size, seq_len, model_dim = x.data.size()
+
+        num_layers = 1
+        bidirectional = self.bi_encode
+        bi = 2 if bidirectional else 1
+        h0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
+        c0 = Variable(torch.zeros(num_layers * bi, batch_size, self.model_dim), volatile=not train)
+
+        # Transforms x
+        #   from  => batch_size x seq_len x model_dim
+        #   to    => seq_len x batch_size x model_dim
+        x = torch.transpose(x, 0, 1)
+
+        # Expects (input, h_0):
+        #   input => seq_len x batch_size x model_dim
+        #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
+        output, (hn, cn) = self.encode(x, (h0, c0))
+        output = torch.transpose(output, 0, 1)
+
+        return output
 
     def run_mlp(self, h, train):
         h = self.l0(h)
@@ -132,7 +162,11 @@ class SentencePairModel(BaseModel):
         x = torch.cat([x_prem, x_hyp], 0)
 
         emb = self.embed(x, train)
-        hh = torch.squeeze(self.run_rnn(emb))
+
+        if self.use_encode:
+            emb = self.run_encode(emb, train)
+
+        hh = torch.squeeze(self.run_rnn(emb, train))
         h = torch.cat([hh[:batch_size], hh[batch_size:]], 1)
         logits = self.run_mlp(h, train)
 
@@ -151,7 +185,11 @@ class SentenceModel(BaseModel):
         x = Variable(sentences, volatile=not train)
 
         emb = self.embed(x, train)
-        h = torch.squeeze(self.run_rnn(emb))
+
+        if self.use_encode:
+            emb = self.run_encode(emb, train)
+
+        h = torch.squeeze(self.run_rnn(emb, train))
         logits = self.run_mlp(h, train)
 
         _, h, _ = self.fwd_rnn(embeds, train, keep_hs=False)
