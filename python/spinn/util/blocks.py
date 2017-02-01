@@ -120,12 +120,10 @@ def expand_dims(var, dim=0):
     return var.view(*sizes)
 
 
-def expand_along(rewards, tr_mask):
-    assert isinstance(rewards, np.ndarray)
-    mask = np.extract(tr_mask, np.tile(np.arange(tr_mask.shape[0]), (tr_mask.shape[1], 1)).T)
-    tiled_rewards = np.tile(rewards, (mask.shape[0], 1))
-    ret = tiled_rewards[six.moves.range(mask.size), mask]
-    return ret
+def expand_along(var, mask):
+    indexes = np.tile(np.arange(var.shape[0]).reshape(-1, 1), (1, mask.shape[1]))
+    _mask = indexes[mask]
+    return var[_mask]
 
 
 def var_mean(x, axis=0):
