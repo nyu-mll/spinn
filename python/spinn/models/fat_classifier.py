@@ -40,10 +40,10 @@ def flatten(l):
 
 
 def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_dim,
-                seq_length, num_classes, initial_embeddings, use_sentence_pair,
+                num_classes, initial_embeddings, use_sentence_pair,
                 gpu, mlp_dim, project_embeddings):
     model = model_cls(model_dim, word_embedding_dim, vocab_size,
-             seq_length, initial_embeddings, num_classes, mlp_dim=mlp_dim,
+             initial_embeddings, num_classes, mlp_dim=mlp_dim,
              project_embeddings=project_embeddings,
              embedding_keep_rate=FLAGS.embedding_keep_rate,
              classifier_keep_rate=FLAGS.semantic_classifier_keep_rate,
@@ -87,11 +87,30 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
     evalb_parses = []
     parses = []
     for i, (eval_X_batch, eval_transitions_batch, eval_y_batch, eval_num_transitions_batch) in enumerate(eval_set[1]):
-        eval_X_batch = torch.from_numpy(eval_X_batch).long()
-        eval_y_batch = torch.from_numpy(eval_y_batch).long()
 
-        if FLAGS.gpu >= 0:
-            eval_X_batch, eval_y_batch = eval_X_batch.cuda(), eval_y_batch.cuda()
+        # Truncate each batch to max length within the batch.
+        if FLAGS.truncate_eval_batch:
+            X_batch_is_left_padded = False
+            transitions_batch_is_left_padded = True
+            max_transitions = np.max(eval_num_transitions_batch)
+            seq_length = eval_X_batch.shape[1]
+
+            if X_batch_is_left_padded:
+                eval_X_batch = eval_X_batch[:, seq_length - max_transitions:, :]
+            else:
+                eval_X_batch = eval_X_batch[:, :max_transitions, :]
+
+            if transitions_batch_is_left_padded:
+                eval_transitions_batch = eval_transitions_batch[:, seq_length - max_transitions:, :]
+            else:
+                eval_transitions_batch = eval_transitions_batch[:, :max_transitions, :]
+
+            # Transfer data to tensors.
+            eval_X_batch = torch.from_numpy(eval_X_batch).long()
+            eval_y_batch = torch.from_numpy(eval_y_batch).long()
+
+            if FLAGS.gpu >= 0:
+                eval_X_batch, eval_y_batch = eval_X_batch.cuda(), eval_y_batch.cuda()
 
 
         # Calculate Local Accuracies
@@ -263,7 +282,7 @@ def run(only_forward=False):
     for filename, raw_eval_set in raw_eval_sets:
         logger.Log("Preprocessing eval data: " + filename)
         e_X, e_transitions, e_y, e_num_transitions = util.PreprocessDataset(
-            raw_eval_set, vocabulary, FLAGS.seq_length, data_manager, eval_mode=True, logger=logger,
+            raw_eval_set, vocabulary, FLAGS.eval_seq_length, data_manager, eval_mode=True, logger=logger,
             sentence_pair_data=data_manager.SENTENCE_PAIR_DATA,
             for_rnn=FLAGS.model_type == "RNN" or FLAGS.model_type == "CBOW",
             use_left_padding=FLAGS.use_left_padding)
@@ -296,7 +315,7 @@ def run(only_forward=False):
         use_sentence_pair = True
         classifier_trainer = build_model(model_cls, trainer_cls,
                               len(vocabulary), FLAGS.model_dim, FLAGS.word_embedding_dim,
-                              FLAGS.seq_length, num_classes, initial_embeddings,
+                              num_classes, initial_embeddings,
                               use_sentence_pair,
                               FLAGS.gpu,
                               FLAGS.mlp_dim,
@@ -313,7 +332,7 @@ def run(only_forward=False):
         use_sentence_pair = False
         classifier_trainer = build_model(model_cls, trainer_cls,
                               len(vocabulary), FLAGS.model_dim, FLAGS.word_embedding_dim,
-                              FLAGS.seq_length, num_classes, initial_embeddings,
+                              num_classes, initial_embeddings,
                               use_sentence_pair,
                               FLAGS.gpu,
                               FLAGS.mlp_dim,
@@ -388,8 +407,26 @@ def run(only_forward=False):
 
             start = time.time()
 
-            X_batch, transitions_batch, y_batch, _ = training_data_iter.next()
+            X_batch, transitions_batch, y_batch, num_transitions_batch = training_data_iter.next()
 
+            # Truncate each batch to max length within the batch.
+            if FLAGS.truncate_train_batch:
+                X_batch_is_left_padded = False
+                transitions_batch_is_left_padded = True
+                max_transitions = np.max(num_transitions_batch)
+                seq_length = X_batch.shape[1]
+
+                if X_batch_is_left_padded:
+                    X_batch = X_batch[:, seq_length - max_transitions:]
+                else:
+                    X_batch = X_batch[:, :max_transitions]
+
+                if transitions_batch_is_left_padded:
+                    transitions_batch = transitions_batch[:, seq_length - max_transitions:]
+                else:
+                    transitions_batch = transitions_batch[:, :max_transitions]
+
+            # Put data into tensors.
             X_batch = torch.from_numpy(X_batch).long()
             y_batch = torch.from_numpy(y_batch).long()
 
@@ -585,6 +622,8 @@ if __name__ == '__main__':
     gflags.DEFINE_integer("deq_length", 10, "Max trailing examples to use for statistics.")
     gflags.DEFINE_integer("seq_length", 30, "")
     gflags.DEFINE_integer("eval_seq_length", 30, "")
+    gflags.DEFINE_boolean("truncate_train_batch", True, "Truncate batch length max length of any example.")
+    gflags.DEFINE_boolean("truncate_eval_batch", True, "Truncate batch length max length of any example.")
     gflags.DEFINE_boolean("use_internal_parser", False, "Use predicted parse rather than ground truth.")
     gflags.DEFINE_boolean("smart_batching", True, "Organize batches using sequence length.")
     gflags.DEFINE_boolean("use_peano", True, "A mind-blowing sorting key.")

@@ -317,7 +317,7 @@ class SPINN(nn.Module):
 
 class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
-                 seq_length, initial_embeddings, num_classes, mlp_dim,
+                 initial_embeddings, num_classes, mlp_dim,
                  embedding_keep_rate, classifier_keep_rate,
                  project_embeddings=True,
                  tracker_keep_rate=1.0,

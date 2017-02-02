@@ -29,7 +29,7 @@ class SentenceTrainer(SentencePairTrainer):
 
 class BaseModel(nn.Module):
     def __init__(self, model_dim, word_embedding_dim, vocab_size,
-                 seq_length, initial_embeddings, num_classes, mlp_dim,
+                 initial_embeddings, num_classes, mlp_dim,
                  embedding_keep_rate, classifier_keep_rate,
                  use_tracker_dropout=True, tracker_dropout_rate=0.1,
                  use_input_dropout=False, use_input_norm=False,
@@ -70,19 +70,19 @@ class BaseModel(nn.Module):
 
         if use_encode:
             bi = 2 if self.bi_encode else 1
-            self.encode = LSTM(word_embedding_dim, model_dim / bi, 1,
+            self.encode = LSTM(word_embedding_dim, model_dim / bi, num_layers=1,
                 batch_first=True,
                 bidirectional=self.bi_encode,
                 initializer=HeKaimingInit,
                 )
 
-        self.rnn = nn.LSTM(word_embedding_dim, model_dim, 1, batch_first=True)
+        self.rnn = nn.LSTM(word_embedding_dim, model_dim, num_layers=1, batch_first=True)
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else model_dim
 
-        self.l0 = Linear(mlp_input_dim, mlp_dim, initializer=HeKaimingInit)
-        self.l1 = Linear(mlp_dim, mlp_dim, initializer=HeKaimingInit)
-        self.l2 = Linear(mlp_dim, num_classes, initializer=HeKaimingInit)
+        self.l0 = Linear(mlp_input_dim, mlp_dim)
+        self.l1 = Linear(mlp_dim, mlp_dim)
+        self.l2 = Linear(mlp_dim, num_classes)
 
         print(self)
 
@@ -100,8 +100,9 @@ class BaseModel(nn.Module):
         c0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim), self.gpu), volatile=not train)
 
         # Expects (input, h_0):
-        #   input => seq_len x batch_size x model_dim
+        #   input => batch_size x seq_len x model_dim
         #   h_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
+        #   c_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
         output, (hn, cn) = self.rnn(x, (h0, c0))
 
         return hn
@@ -116,7 +117,7 @@ class BaseModel(nn.Module):
         c0 = Variable(to_cuda(torch.zeros(num_layers * bi, batch_size, self.model_dim / bi), self.gpu), volatile=not train)
 
         # Expects (input, h_0, c_0):
-        #   input => seq_len x batch_size x model_dim
+        #   input => batch_size x seq_len x model_dim
         #   h_0   => (num_layers x bi[1,2]) x batch_size x model_dim
         #   c_0   => (num_layers x bi[1,2]) x batch_size x model_dim
         output, (hn, cn) = self.encode(x, (h0, c0))
@@ -160,9 +161,7 @@ class SentencePairModel(BaseModel):
 
 class SentenceModel(BaseModel):
     def forward(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        batch_size, seq_length = sentences.size()
-
-        # Build Tokens
+         # Build Tokens
         x = Variable(sentences, volatile=not train)
 
         emb = self.embed(x, train)
@@ -173,16 +172,8 @@ class SentenceModel(BaseModel):
         h = torch.squeeze(self.run_rnn(emb, train))
         logits = self.run_mlp(h, train)
 
-        _, h, _ = self.fwd_rnn(embeds, train, keep_hs=False)
-        y = self.run_mlp(h, train)
-
-        # Calculate Loss & Accuracy.
         if y_batch is not None:
             loss = F.nll_loss(logits, Variable(y_batch, volatile=not train))
             pred = logits.data.max(1)[1] # get the index of the max log-probability
             acc = pred.eq(y_batch).sum() / float(y_batch.size(0))
-        else:
-            accum_loss = 0.0
-            acc = 0.0
-
         return logits, loss, acc, 0.0, None, None
