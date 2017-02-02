@@ -427,6 +427,7 @@ class BaseModel(nn.Module):
             self.project = lambda x: x
 
         if self.use_encode:
+            raise NotImplementedError("Checkpoints are broken with use_encode.")
             bi = 2 if self.bi_encode else 1
             self.encode = LSTM(word_embedding_dim, model_dim / bi, 1,
                 batch_first=True,
