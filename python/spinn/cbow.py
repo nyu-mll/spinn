@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
-from spinn.util.blocks import BaseSentencePairTrainer, HeKaimingInit
+from spinn.util.blocks import BaseSentencePairTrainer, Linear
 
 
 class SentencePairTrainer(BaseSentencePairTrainer):
@@ -66,24 +66,16 @@ class BaseModel(nn.Module):
 
         mlp_input_dim = word_embedding_dim * 2 if use_sentence_pair else word_embedding_dim
 
-        self.l0 = nn.Linear(mlp_input_dim, mlp_dim)
-        self.l1 = nn.Linear(mlp_dim, mlp_dim)
-        self.l2 = nn.Linear(mlp_dim, num_classes)
+        self.l0 = Linear(mlp_input_dim, mlp_dim)
+        self.l1 = Linear(mlp_dim, mlp_dim)
+        self.l2 = Linear(mlp_dim, num_classes)
 
-        self.init_params()
+        print(self)
 
-
-    def init_params(self):
-        def weights_init(m):
-            initrange = 0.1
-            if hasattr(m, 'weight') and m.weight.requires_grad:
-                m.weight.data.set_(torch.from_numpy(HeKaimingInit(m.weight.data.size())).float())
-            if hasattr(m, 'bias') and m.bias.requires_grad:
-                m.bias.data.uniform_(-initrange, initrange)
-        self.apply(weights_init)
 
     def embed(self, x, train):
         return self._embed(x)
+
 
     def run_mlp(self, h, train):
         h = self.l0(h)

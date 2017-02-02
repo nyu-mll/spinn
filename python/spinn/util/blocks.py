@@ -62,7 +62,7 @@ def EmptyClosure(var):
 
 
 class Linear(nn.Linear):
-    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=HeKaimingInit, bias_initializer=ZeroInitializer, **kwargs):
         self.closure = closure
         self.initializer = initializer
         self.bias_initializer = bias_initializer
@@ -78,7 +78,7 @@ class Linear(nn.Linear):
 
 
 class LSTM(nn.LSTM):
-    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=HeKaimingInit, bias_initializer=ZeroInitializer, **kwargs):
         self.closure = closure
         self.initializer = initializer
         self.bias_initializer = bias_initializer
@@ -96,7 +96,7 @@ class LSTM(nn.LSTM):
 
 
 class LSTMCell(nn.LSTMCell):
-    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=UniformInitializer, bias_initializer=ZeroInitializer, **kwargs):
+    def __init__(self, input_size, hidden_size, closure=EmptyClosure, initializer=HeKaimingInit, bias_initializer=ZeroInitializer, **kwargs):
         self.closure = closure
         self.initializer = initializer
         self.bias_initializer = bias_initializer
@@ -120,6 +120,40 @@ class LSTMCell(nn.LSTMCell):
             s += ', nonlinearity={nonlinearity}'
         s += ')'
         return s.format(name=self.__class__.__name__, **self.__dict__)
+
+
+class MLP(nn.Module):
+    def __init__(self, mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
+                 classifier_dropout_rate=0.0):
+        super(MLP, self).__init__()
+
+        self.num_mlp_layers = num_mlp_layers
+        self.mlp_bn = mlp_bn
+        self.classifier_dropout_rate = classifier_dropout_rate
+
+        features_dim = mlp_input_dim
+        for i in range(num_mlp_layers):
+            setattr(self, 'l{}'.format(i), Linear(features_dim, mlp_dim,
+                initializer=HeKaimingInit))
+            if mlp_bn:
+                setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
+            features_dim = mlp_dim
+        setattr(self, 'l{}'.format(num_mlp_layers), Linear(features_dim, num_classes,
+                initializer=HeKaimingInit))
+
+    def forward(self, h, train):
+        for i in range(self.num_mlp_layers):
+            layer = getattr(self, 'l{}'.format(i))
+            h = layer(h)
+            h = F.relu(h)
+            if self.mlp_bn:
+                bn = getattr(self, 'bn{}'.format(i))
+                h = bn(h)
+            h = dropout(h, self.classifier_dropout_rate, train)
+        layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
+        h = layer(h)
+        y = F.log_softmax(h)
+        return y
 
 
 def to_cuda(var, gpu):

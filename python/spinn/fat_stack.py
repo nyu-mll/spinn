@@ -17,7 +17,7 @@ from spinn.util.blocks import bundle, unbundle, to_cuda
 from spinn.util.blocks import treelstm, expand_along, dropout, select_item
 from spinn.util.blocks import get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
-from spinn.util.blocks import Linear, LSTM, LSTMCell, Identity, lstm
+from spinn.util.blocks import MLP, Linear, LSTM, LSTMCell, Identity, lstm
 from spinn.util.blocks import HeKaimingInit, ZeroInitializer
 
 from sklearn import metrics
@@ -62,14 +62,19 @@ class SentenceTrainer(SentencePairTrainer):
 
 class Tracker(nn.Module):
 
-    def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False):
+    def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False, rnn_type="LSTM"):
         super(Tracker, self).__init__()
-        self.buf = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
-        self.stack1 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
-        self.stack2 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
-        self.lateral = Linear(tracker_size, 4 * tracker_size, initializer=HeKaimingInit)
-        if predict:
-            self.transition = Linear(tracker_size, 3 if use_skips else 2, initializer=HeKaimingInit)
+        if rnn_type == "LSTM":
+            self.buf = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+            self.stack1 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+            self.stack2 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
+            self.lateral = Linear(tracker_size, 4 * tracker_size, initializer=HeKaimingInit)
+            if predict:
+                self.transition = Linear(tracker_size, 3 if use_skips else 2, initializer=HeKaimingInit)
+        elif rnn_type == "GRU":
+            raise NotImplementedError()
+        else:
+            raise NotImplementedError()
         self.state_size = tracker_size
         self.tracker_dropout_rate = tracker_dropout_rate
         self.reset_state()
@@ -308,40 +313,6 @@ class SPINN(nn.Module):
 
         hyp_acc, truth_acc, hyp_xent, truth_xent = statistics
         return hyp_acc, truth_acc, hyp_xent, truth_xent
-
-
-class MLP(nn.Module):
-    def __init__(self, mlp_input_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
-                 classifier_dropout_rate=0.0):
-        super(MLP, self).__init__()
-
-        self.num_mlp_layers = num_mlp_layers
-        self.mlp_bn = mlp_bn
-        self.classifier_dropout_rate = classifier_dropout_rate
-
-        features_dim = mlp_input_dim
-        for i in range(num_mlp_layers):
-            setattr(self, 'l{}'.format(i), Linear(features_dim, mlp_dim,
-                initializer=HeKaimingInit))
-            if mlp_bn:
-                setattr(self, 'bn{}'.format(i), nn.BatchNorm1d(mlp_dim))
-            features_dim = mlp_dim
-        setattr(self, 'l{}'.format(num_mlp_layers), Linear(features_dim, num_classes,
-                initializer=HeKaimingInit))
-
-    def forward(self, h, train):
-        for i in range(self.num_mlp_layers):
-            layer = getattr(self, 'l{}'.format(i))
-            h = layer(h)
-            h = F.relu(h)
-            if self.mlp_bn:
-                bn = getattr(self, 'bn{}'.format(i))
-                h = bn(h)
-            h = dropout(h, self.classifier_dropout_rate, train)
-        layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
-        h = layer(h)
-        y = F.log_softmax(h)
-        return y
 
 
 class BaseModel(nn.Module):
