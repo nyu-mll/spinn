@@ -17,7 +17,7 @@ from spinn.util.blocks import bundle, unbundle, to_cuda
 from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
 from spinn.util.blocks import get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
-from spinn.util.blocks import Linear, LSTM, LSTMCell
+from spinn.util.blocks import Linear, LSTM, LSTMCell, Identity
 from spinn.util.blocks import HeKaimingInit, ZeroInitializer
 
 from sklearn import metrics
@@ -424,15 +424,13 @@ class BaseModel(nn.Module):
         if project_embeddings and not self.use_encode:
             self.project = Linear(word_embedding_dim, model_dim, initializer=HeKaimingInit)
         else:
-            self.project = lambda x: x
+            self.project = Identity
 
         if self.use_encode:
-            raise NotImplementedError("Checkpoints are broken with use_encode.")
             bi = 2 if self.bi_encode else 1
-            self.encode = LSTM(word_embedding_dim, model_dim / bi, 1,
+            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, num_layers=1,
                 batch_first=True,
                 bidirectional=self.bi_encode,
-                initializer=HeKaimingInit,
                 )
 
         self.spinn = SPINN(args, vocab, use_skips=use_skips)

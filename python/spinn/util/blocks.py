@@ -15,6 +15,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
+def Identity(x):
+    return x
+
 
 def HeKaimingInit(var):
     fan = var.size()
