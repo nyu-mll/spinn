@@ -15,6 +15,25 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 
+def extract_gates(x, n):
+    r = x.view(x.size(0), x.size(1) // n, n)
+    return [r[:, :, i] for i in range(n)]
+
+
+def lstm(c_prev, x):
+    a, i, f, o = extract_gates(x, 4)
+
+    a = F.tanh(a)
+    i = F.sigmoid(i)
+    f = F.sigmoid(f)
+    o = F.sigmoid(o)
+
+    c = a * i + f * c_prev
+    h = o * F.tanh(c)
+
+    return c, h
+
+
 def Identity(x):
     return x
 
@@ -170,12 +189,6 @@ def dropout(inp, ratio, train):
     if ratio > 0:
         return F.dropout(inp, ratio, train)
     return inp
-
-
-def expand_dims(var, dim=0):
-    sizes = list(var.size())
-    sizes.insert(dim, 1)
-    return var.view(*sizes)
 
 
 def expand_along(var, mask):

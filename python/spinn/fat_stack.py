@@ -14,10 +14,10 @@ import torch.optim as optim
 
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle, to_cuda
-from spinn.util.blocks import treelstm, expand_along, dropout, expand_dims, select_item
+from spinn.util.blocks import treelstm, expand_along, dropout, select_item
 from spinn.util.blocks import get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
-from spinn.util.blocks import Linear, LSTM, LSTMCell, Identity
+from spinn.util.blocks import Linear, LSTM, LSTMCell, Identity, lstm
 from spinn.util.blocks import HeKaimingInit, ZeroInitializer
 
 from sklearn import metrics
@@ -39,7 +39,7 @@ TODO:
     - [x] Reduce
     - [x] Transition
     - [x] MLP
-- [ ] Gradient Clipping
+- [x] Gradient Clipping
 - [ ] Add GRU option for encoding layer and for tracker.
 
 """
@@ -67,7 +67,7 @@ class Tracker(nn.Module):
         self.buf = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
         self.stack1 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
         self.stack2 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
-        self.lstm = LSTMCell(4 * tracker_size, tracker_size, bias=False, initializer=HeKaimingInit)
+        self.lateral = Linear(tracker_size, 4 * tracker_size, initializer=HeKaimingInit)
         if predict:
             self.transition = Linear(tracker_size, 3 if use_skips else 2, initializer=HeKaimingInit)
         self.state_size = tracker_size
@@ -89,20 +89,17 @@ class Tracker(nn.Module):
         lstm_in = self.buf(buf.h)
         lstm_in += self.stack1(stack1.h)
         lstm_in += self.stack2(stack2.h)
+        if self.h is not None:
+            lstm_in += self.lateral(self.h)
         if self.c is None:
             self.c = Variable(to_cuda(torch.from_numpy(
-                np.zeros((self.batch_size, self.state_size),
-                              dtype=np.float32)), self.gpu),
-                volatile=not train)
-        if self.h is None:
-            self.h = Variable(to_cuda(torch.from_numpy(
                 np.zeros((self.batch_size, self.state_size),
                               dtype=np.float32)), self.gpu),
                 volatile=not train)
 
         # TODO: Tracker dropout.
 
-        self.h, self.c = self.lstm(lstm_in, (self.h, self.c))
+        self.h, self.c = lstm(self.c, lstm_in)
         if hasattr(self, 'transition'):
             return self.transition(self.h)
         return None
@@ -241,6 +238,8 @@ class SPINN(nn.Module):
                             lr.append(stack.pop())
                         else:
                             # TODO: This only happens in SNLI eval for some reason...
+                            # It's because SNLI eval has sentences longer than 50. Maybe
+                            # should try eval with longer length.
                             zeros = Variable(to_cuda(torch.from_numpy(np.zeros(buf[0].size(),
                                 dtype=np.float32)), self.gpu),
                                 volatile=not train)
@@ -302,7 +301,7 @@ class SPINN(nn.Module):
             for m in self.memories])
 
         statistics = [
-            torch.squeeze(torch.cat([expand_dims(ss, 1) for ss in s], 0))
+            torch.squeeze(torch.cat([ss.unsqueeze(1) for ss in s], 0))
             if isinstance(s[0], Variable) else
             np.array(reduce(lambda x, y: x + y.tolist(), s, []))
             for s in statistics]
@@ -606,8 +605,7 @@ class BaseModel(nn.Module):
 
     def build_rewards(self, logits, y, style="zero-one"):
         if style == "xent":
-            rewards = -1. * F.concat([expand_dims(
-                        F.softmax_cross_entropy(logits[i:(i+1)], y[i:(i+1)]), axis=0)
+            rewards = -1. * F.concat([F.softmax_cross_entropy(logits[i:(i+1)], y[i:(i+1)]).unsqueeze(0)
                         for i in range(y.shape[0])], axis=0).data
         elif style == "zero-one":
             rewards = torch.eq(logits.max(1)[1].data, y).float()
