@@ -49,7 +49,7 @@ class SentencePairTrainer(BaseSentencePairTrainer):
     def init_optimizer(self, lr=0.01, l2_lambda=0.0, opt="RMSprop", **kwargs):
         relevant_params = [w for w in self.model.parameters() if w.requires_grad]
         if opt == "RMSprop":
-            self.optimizer = optim.RMSprop(relevant_params, lr=lr, alpha=0.9, weight_decay=l2_lambda)
+            self.optimizer = optim.RMSprop(relevant_params, lr=lr, alpha=0.9, eps=1e-06, weight_decay=l2_lambda)
         elif opt == "Adam":
             self.optimizer = optim.Adam(relevant_params, lr=lr, betas=(0.9, 0.999), weight_decay=l2_lambda)
         else:
@@ -104,7 +104,7 @@ class Tracker(nn.Module):
 
         # TODO: Tracker dropout.
 
-        self.h, self.c = lstm(self.c, lstm_in)
+        self.c, self.h = lstm(self.c, lstm_in)
         if hasattr(self, 'transition'):
             return self.transition(self.h)
         return None
@@ -165,66 +165,62 @@ class SPINN(nn.Module):
         if hasattr(self, 'transitions'):
             num_transitions = self.transitions.shape[1]
         else:
-            num_transitions = len(self.bufs[0]) * 2 - 3
+            raise NotImplementedError('Running without transitions not implemented.')
 
         for i in range(num_transitions):
-            if hasattr(self, 'transitions'):
-                transitions = self.transitions[:, i]
-                transition_arr = list(transitions)
-            else:
-                raise NotImplementedError('Running without transitions not implemented.')
+            transitions = self.transitions[:, i]
+            transition_arr = list(transitions)
 
             cant_skip = np.array([t != T_SKIP for t in transitions])
             if hasattr(self, 'tracker') and (self.use_skips or sum(cant_skip) > 0):
                 transition_hyp = self.tracker(self.bufs, self.stacks, train)
                 if transition_hyp is not None and run_internal_parser:
-                    if hasattr(self, 'transitions'):
-                        memory = {}
-                        truth_acc = transitions
-                        hyp_xent = transition_hyp
-                        if use_reinforce:
-                            probas = F.softmax(transition_hyp)
-                            samples = np.array([T_SKIP for _ in self.bufs], dtype=np.int32)
-                            samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data.cpu().numpy()[cant_skip]]
+                    memory = {}
+                    truth_acc = transitions
+                    hyp_xent = transition_hyp
+                    if use_reinforce:
+                        probas = F.softmax(transition_hyp)
+                        samples = np.array([T_SKIP for _ in self.bufs], dtype=np.int32)
+                        samples[cant_skip] = [np.random.choice(self.choices, 1, p=proba)[0] for proba in probas.data.cpu().numpy()[cant_skip]]
 
-                            transition_preds = samples
-                            hyp_acc = probas
-                            truth_xent = samples
-                        else:
-                            transition_preds = transition_hyp.data.cpu().numpy().argmax(axis=1)
-                            hyp_acc = transition_hyp
-                            truth_xent = transitions
+                        transition_preds = samples
+                        hyp_acc = probas
+                        truth_xent = samples
+                    else:
+                        transition_preds = transition_hyp.data.cpu().numpy().argmax(axis=1)
+                        hyp_acc = transition_hyp
+                        truth_xent = transitions
 
-                        if validate_transitions:
-                            transition_preds = self.validate(transition_arr, transition_preds,
-                                self.stacks, self.buffers_t, self.buffers_n)
+                    if validate_transitions:
+                        transition_preds = self.validate(transition_arr, transition_preds,
+                            self.stacks, self.buffers_t, self.buffers_n)
 
-                        memory["logits"] = transition_hyp
-                        memory["preds"]  = transition_preds
+                    memory["logits"] = transition_hyp
+                    memory["preds"]  = transition_preds
 
-                        if not self.use_skips:
-                            hyp_acc = hyp_acc.data.cpu().numpy()[cant_skip]
-                            truth_acc = truth_acc[cant_skip]
+                    if not self.use_skips:
+                        hyp_acc = hyp_acc.data.cpu().numpy()[cant_skip]
+                        truth_acc = truth_acc[cant_skip]
 
-                            cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
-                            hyp_xent = torch.chunk(transition_hyp, transition_hyp.size(0), 0)
-                            hyp_xent = torch.cat([hyp_xent[iii] for iii, y in enumerate(cant_skip) if y], 0)
-                            truth_xent = truth_xent[cant_skip]
+                        cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
+                        hyp_xent = torch.chunk(transition_hyp, transition_hyp.size(0), 0)
+                        hyp_xent = torch.cat([hyp_xent[iii] for iii, y in enumerate(cant_skip) if y], 0)
+                        truth_xent = truth_xent[cant_skip]
 
-                        self.transition_mask[cant_skip, i] = True
+                    self.transition_mask[cant_skip, i] = True
 
-                        memory["hyp_acc"] = hyp_acc
-                        memory["truth_acc"] = truth_acc
-                        memory["hyp_xent"] = hyp_xent
-                        memory["truth_xent"] = truth_xent
+                    memory["hyp_acc"] = hyp_acc
+                    memory["truth_acc"] = truth_acc
+                    memory["hyp_xent"] = hyp_xent
+                    memory["truth_xent"] = truth_xent
 
-                        memory["preds_cm"] = np.array(transition_preds[cant_skip])
-                        memory["truth_cm"] = np.array(transitions[cant_skip])
+                    memory["preds_cm"] = np.array(transition_preds[cant_skip])
+                    memory["truth_cm"] = np.array(transitions[cant_skip])
 
-                        if use_internal_parser:
-                            transition_arr = transition_preds.tolist()
+                    if use_internal_parser:
+                        transition_arr = transition_preds.tolist()
 
-                        self.memories.append(memory)
+                    self.memories.append(memory)
 
             lefts, rights, trackings = [], [], []
             batch = zip(transition_arr, self.bufs, self.stacks,
@@ -379,21 +375,15 @@ class BaseModel(nn.Module):
         vocab = argparse.Namespace(**vocab)
 
         if initial_embeddings is not None:
-            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
-            self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
-            self._embed.weight.requires_grad = False
+            self.vectors = initial_embeddings
+            self.project = Linear(word_embedding_dim, model_dim, initializer=HeKaimingInit)
         else:
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
-
-        if project_embeddings and not self.use_encode:
-            self.project = Linear(word_embedding_dim, model_dim, initializer=HeKaimingInit)
-        else:
-            self.project = Identity
-
+        
         if self.use_encode:
             bi = 2 if self.bi_encode else 1
-            self.encode = nn.LSTM(word_embedding_dim, model_dim / bi, num_layers=1,
+            self.encode = nn.LSTM(model_dim, model_dim / bi, num_layers=1,
                 batch_first=True,
                 bidirectional=self.bi_encode,
                 )
@@ -464,7 +454,13 @@ class BaseModel(nn.Module):
 
 
     def run_embed(self, tokens, train):
-        return self._embed(tokens)
+        if hasattr(self, '_embed'):
+            emb = self._embed(tokens.view(-1))
+        else:
+            emb = Variable(torch.from_numpy(
+                self.vectors.take(tokens.data.numpy().ravel(), axis=0)), volatile=not train)
+            emb = self.project(emb)
+        return emb
 
 
     def run_encode(self, x, train):
@@ -513,22 +509,17 @@ class BaseModel(nn.Module):
         example = self.build_example(sentences, transitions, train)
 
         tokens = example.tokens
+        batch_size, seq_length = tokens.size()[:2]
 
         emb = self.run_embed(tokens, train)
         if rl_baseline == "policy":
-            policy_emb = emb.clone()
+            policy_emb = emb.clone().view(batch_size, seq_length, -1)
         emb = dropout(emb, self.embedding_dropout_rate, train)
 
-        batch_size, seq_length, _ = emb.size()
-
         if self.use_encode:
+            emb = emb.view(batch_size, seq_length, -1)
             emb = self.run_encode(emb, train)
-            # Flatten after.
             emb = emb.contiguous().view(-1, self.model_dim)
-        else:
-            # Flatten first.
-            emb = emb.view(-1, self.word_embedding_dim)
-            emb = self.project(emb)
 
         buffers = self.build_buffers(emb, batch_size, seq_length)
 

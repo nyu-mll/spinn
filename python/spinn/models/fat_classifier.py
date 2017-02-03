@@ -744,7 +744,7 @@ if __name__ == '__main__':
     # Parse command line flags.
     FLAGS(sys.argv)
 
-    if not torch.cuda.is_available():
+    if FLAGS.gpu >= 0 and not torch.cuda.is_available():
         FLAGS.gpu = -1
 
     if not FLAGS.model_type == "SPINN":
