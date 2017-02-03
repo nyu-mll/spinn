@@ -64,6 +64,7 @@ def build_model(model_cls, trainer_cls, vocab_size, model_dim, word_embedding_di
              use_product_feature=FLAGS.use_product_feature,
              rl_baseline=None if not FLAGS.use_reinforce else FLAGS.rl_baseline,
              rl_policy_dim=FLAGS.rl_policy_dim,
+             predict_use_cell=FLAGS.predict_use_cell,
             )
 
     classifier_trainer = trainer_cls(model, gpu=gpu)
@@ -687,6 +688,8 @@ if __name__ == '__main__':
     gflags.DEFINE_integer("word_embedding_dim", 8, "")
     gflags.DEFINE_float("transition_weight", None, "")
     gflags.DEFINE_integer("tracking_lstm_hidden_dim", 4, "")
+    gflags.DEFINE_boolean("predict_use_cell", False, "If True, use both `c` and `h` to predict transitions."
+        "Only `h` otherwise.")
     gflags.DEFINE_boolean("use_reinforce", False, "Use RL to provide tracking lstm gradients")
     gflags.DEFINE_enum("rl_style", "zero-one", ["zero-one", "xent"], "Specify REINFORCE configuration.")
     gflags.DEFINE_enum("rl_baseline", "ema", ["ema", "policy", "greedy"], "Specify REINFORCE baseline.")

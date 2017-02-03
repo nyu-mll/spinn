@@ -62,7 +62,9 @@ class SentenceTrainer(SentencePairTrainer):
 
 class Tracker(nn.Module):
 
-    def __init__(self, size, tracker_size, predict, tracker_dropout_rate=0.0, use_skips=False, rnn_type="LSTM"):
+    def __init__(self, size, tracker_size, predict, predict_use_cell=False,
+                 tracker_dropout_rate=0.0, use_skips=False,
+                 rnn_type="LSTM"):
         super(Tracker, self).__init__()
         if rnn_type == "LSTM":
             self.buf = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
@@ -70,11 +72,13 @@ class Tracker(nn.Module):
             self.stack2 = Linear(size, 4 * tracker_size, bias=False, initializer=HeKaimingInit)
             self.lateral = Linear(tracker_size, 4 * tracker_size, initializer=HeKaimingInit)
             if predict:
-                self.transition = Linear(tracker_size, 3 if use_skips else 2, initializer=HeKaimingInit)
+                pred_inp_size = tracker_size * 2 if predict_use_cell else tracker_size
+                self.transition = Linear(pred_inp_size, 3 if use_skips else 2, initializer=HeKaimingInit)
         elif rnn_type == "GRU":
             raise NotImplementedError()
         else:
             raise NotImplementedError()
+        self.predict_use_cell = predict_use_cell
         self.state_size = tracker_size
         self.tracker_dropout_rate = tracker_dropout_rate
         self.reset_state()
@@ -106,7 +110,10 @@ class Tracker(nn.Module):
 
         self.c, self.h = lstm(self.c, lstm_in)
         if hasattr(self, 'transition'):
-            return self.transition(self.h)
+            if self.predict_use_cell:
+                return self.transition(torch.cat([self.c, self.h], 1))
+            else:
+                return self.transition(self.h)
         return None
 
     @property
@@ -122,12 +129,12 @@ class Tracker(nn.Module):
 
 class SPINN(nn.Module):
 
-    def __init__(self, args, vocab, use_skips=False):
+    def __init__(self, args, vocab, use_skips=False, predict_use_cell=False):
         super(SPINN, self).__init__()
         self.reduce = Reduce(args.size, args.tracker_size, use_tracking_in_composition=args.use_tracking_in_composition)
         if args.tracker_size is not None:
             self.tracker = Tracker(
-                args.size, args.tracker_size,
+                args.size, args.tracker_size, predict_use_cell=predict_use_cell,
                 predict=args.transition_weight is not None,
                 tracker_dropout_rate=args.tracker_dropout_rate, use_skips=use_skips)
         self.transition_weight = args.transition_weight
@@ -332,6 +339,7 @@ class BaseModel(nn.Module):
                  mlp_bn=False,
                  rl_baseline=None,
                  rl_policy_dim=None,
+                 predict_use_cell=False,
                  **kwargs
                 ):
         super(BaseModel, self).__init__()
@@ -388,7 +396,7 @@ class BaseModel(nn.Module):
                 bidirectional=self.bi_encode,
                 )
 
-        self.spinn = SPINN(args, vocab, use_skips=use_skips)
+        self.spinn = SPINN(args, vocab, use_skips=use_skips, predict_use_cell=predict_use_cell)
 
         features_dim = mlp_input_dim
         if self.use_sentence_pair:
