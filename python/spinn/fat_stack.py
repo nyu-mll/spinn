@@ -561,10 +561,9 @@ class BaseModel(nn.Module):
                 self.avg_baseline = baseline.data.mean()
                 new_rewards = rewards - baseline.data
             elif rl_baseline == "greedy": # Greedy Max
-                raise NotImplementedError()
-                # baseline = self.run_greedy_max(sentences, transitions, y_batch, train, rewards, rl_style)
-                # self.avg_baseline = baseline.mean()
-                # new_rewards = rewards - baseline
+                baseline = self.run_greedy_max(sentences, transitions, y_batch, train, rewards, rl_style)
+                self.avg_baseline = baseline.mean()
+                new_rewards = rewards - baseline
             else:
                 raise NotImplementedError()
 
@@ -596,7 +595,8 @@ class BaseModel(nn.Module):
 
     def run_greedy_max(self, sentences, transitions, y_batch, train, rewards, rl_style):
         # TODO: Should this be run with train=False? Will effect batchnorm and dropout.
-        y, _, _, _, _ = self.forward(sentences, transitions, y_batch=None, train=train, use_internal_parser=True)
+        ret = self.forward(sentences, transitions, y_batch=None, train=train, use_internal_parser=True)
+        y = ret[0]
         pred_reward = self.build_rewards(y, y_batch, rl_style)
         return pred_reward
 
