@@ -5,7 +5,7 @@ This repository contains the source code based on the paper [A Fast Unified Mode
 
 The included implementations are:
 
-- A **Python/Chainer** implementation of SPINN using a naïve stack representation (named `fat-stack`)
+- A **Python/Pytorch** implementation of SPINN using a naïve stack representation (named `fat-stack`)
 
 ## Python code
 
@@ -16,15 +16,17 @@ The Python code lives, quite intuitively, in the `python` folder. We used this c
 Requirements:
 
 - Python 2.7
-- Chainer 1.17
+- Pytorch
 
-Install all required Python dependencies using the command below.
+Install most required Python dependencies using the command below.
 
     pip install -r python/requirements.txt
 
+Install Pytorch based on instructions online: http://pytorch.org
+
 ### Running the code
 
-The main executable for the SNLI experiments in the paper is [fat_classifier.py](https://github.com/mrdrozdov/spinn/blob/chainer-skeleton-clean/python/spinn/models/fat_classifier.py), whose flags specify the hyperparameters of the model. You can specify the gpu id using the `--gpu <gpu_id>` flag. Uses the CPU by default.
+The main executable for the SNLI experiments in the paper is [fat_classifier.py](https://github.com/mrdrozdov/spinn/blob/master/python/spinn/models/fat_classifier.py), whose flags specify the hyperparameters of the model. You can specify the gpu id using the `--gpu <gpu_id>` flag. Uses the CPU by default.
 
 Here's a sample command that runs a fast, low-dimensional CPU training run, training and testing only on the dev set. It assumes that you have a copy of [SNLI](http://nlp.stanford.edu/projects/snli/) available locally.
 
@@ -33,44 +35,13 @@ Here's a sample command that runs a fast, low-dimensional CPU training run, trai
         --training_data_path spinn/snli_1.0/snli_1.0_dev.jsonl \
         --eval_data_path spinn/snli_1.0/snli_1.0_dev.jsonl \
         --embedding_data_path spinn/python/spinn/tests/test_embedding_matrix.5d.txt \
-        --word_embedding_dim 5 --model_dim 10 --model_type CBOW
+        --word_embedding_dim 10 --model_dim 10 --model_type CBOW
 
 For full runs, you'll also need a copy of the 840B word 300D [GloVe word vectors](http://nlp.stanford.edu/projects/glove/).
 
 ### Viewing Summaries in Tensorboard
 
-To view some statistics in Tensorboard, make sure to turn the "write_summary" flag on. In other words, your run command should look something like this:
-
-    PYTHONPATH=spinn/python \
-        python2.7 -m spinn.models.fat_classifier --data_type snli \
-        --training_data_path snli_1.0/snli_1.0_dev.jsonl \
-        --eval_data_path snli_1.0/snli_1.0_dev.jsonl \
-        --embedding_data_path spinn/python/spinn/tests/test_embedding_matrix.5d.txt \
-        --word_embedding_dim 5 --model_dim 10 \
-        --write_summaries True
-
-You'll also need to install [Tensorflow](http://tflearn.org/installation/#tensorflow-installation).
-
-## Data
-
-To download [SST](http://nlp.stanford.edu/sentiment/):
-
-```
-curl -o temp.zip http://nlp.stanford.edu/sentiment/trainDevTestTrees_PTB.zip
-unzip temp.zip
-rm temp.zip
-mv trees sst
-
-sed -i -e 's/)/\ )/g' ./sst/dev.txt
-sed -i -e 's/)/\ )/g' ./sst/test.txt
-sed -i -e 's/)/\ )/g' ./sst/train.txt
-```
-
-Creating Binary SST data:
-
-```
-cd python && python -m spinn.data.sst.load_sst_data binary
-```
+Metrics are logged periodically with Tensorboard Logger to a directory specified by `--metrics_path`. You will need to install Tensorflow in order to use Tensorboard, but it is an optional dependency for this project.
 
 ## License
 

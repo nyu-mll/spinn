@@ -350,7 +350,6 @@ class BaseModel(nn.Module):
         self.use_sentence_pair = use_sentence_pair
 
         # RL Params
-        self.rl_baseline = rl_baseline
         self.reinforce_lr = 0.01
         self.mu = 0.1
         self.baseline = 0
@@ -516,7 +515,7 @@ class BaseModel(nn.Module):
         tokens = example.tokens
 
         emb = self.run_embed(tokens, train)
-        if self.rl_baseline == "policy":
+        if rl_baseline == "policy":
             policy_emb = emb.clone()
         emb = dropout(emb, self.embedding_dropout_rate, train)
 
