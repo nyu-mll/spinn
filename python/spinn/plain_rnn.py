@@ -84,7 +84,7 @@ class BaseModel(nn.Module):
         self.l1 = Linear(mlp_dim, mlp_dim)
         self.l2 = Linear(mlp_dim, num_classes)
 
-        print(self)
+        self.nonlinear = F.log_softmax if num_classes >= 2 else F.sigmoid
 
 
     def embed(self, x, train):
@@ -130,7 +130,7 @@ class BaseModel(nn.Module):
         h = self.l1(h)
         h = F.relu(h)
         h = self.l2(h)
-        y = F.log_softmax(h)
+        y = self.nonlinear(h)
         return y
 
 

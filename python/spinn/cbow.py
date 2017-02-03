@@ -48,17 +48,21 @@ class BaseModel(nn.Module):
                  use_encode=False,
                  use_skips=False,
                  use_sentence_pair=False,
+                 skip_embedding=False,
                  **kwargs
                 ):
         super(BaseModel, self).__init__()
 
-        if initial_embeddings is not None:
-            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
-            self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
-            self._embed.weight.requires_grad = False
-        else:
-            self._embed = nn.Embedding(vocab_size, word_embedding_dim)
-            self._embed.weight.requires_grad = True
+        self.skip_embedding = skip_embedding
+
+        if not skip_embedding:
+            if initial_embeddings is not None:
+                self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+                self._embed.weight.data.set_(torch.from_numpy(initial_embeddings))
+                self._embed.weight.requires_grad = False
+            else:
+                self._embed = nn.Embedding(vocab_size, word_embedding_dim)
+                self._embed.weight.requires_grad = True
 
         # CBOW doesn't use model_dim right now. Let's leave this message here anyway for now, since
         # word_embedding_dim is effectively the model_dim.
@@ -70,7 +74,7 @@ class BaseModel(nn.Module):
         self.l1 = Linear(mlp_dim, mlp_dim)
         self.l2 = Linear(mlp_dim, num_classes)
 
-        print(self)
+        self.nonlinear = F.log_softmax if num_classes >= 2 else F.sigmoid
 
 
     def embed(self, x, train):
@@ -83,22 +87,26 @@ class BaseModel(nn.Module):
         h = self.l1(h)
         h = F.relu(h)
         h = self.l2(h)
-        y = F.log_softmax(h)
+        y = self.nonlinear(h)
         return y
 
 
 class SentencePairModel(BaseModel):
     def forward(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        batch_size, seq_length = sentences.size()[:2]
+        if not self.skip_embedding:
+            # Build Tokens
+            x_prem = Variable(sentences[:,:,0], volatile=not train)
+            x_hyp = Variable(sentences[:,:,1], volatile=not train)
+            x = torch.cat([x_prem, x_hyp], 0)
 
-        # Build Tokens
-        x_prem = Variable(sentences[:,:,0], volatile=not train)
-        x_hyp = Variable(sentences[:,:,1], volatile=not train)
-        x = torch.cat([x_prem, x_hyp], 0)
+            emb = self.embed(x, train)
+        else:
+            emb = sentences
 
-        emb = self.embed(x, train)
-        hh = torch.squeeze(torch.sum(emb, dim=1)) / seq_length
-        h = torch.cat([hh[:batch_size], hh[batch_size:]], 1)
+        batch_size = emb.size(0)
+
+        hh = torch.squeeze(torch.sum(emb, dim=1))
+        h = torch.cat([hh[:batch_size/2], hh[batch_size/2:]], 1)
         logits = self.run_mlp(h, train)
 
         if y_batch is not None:
@@ -114,12 +122,16 @@ class SentencePairModel(BaseModel):
 
 class SentenceModel(BaseModel):
     def forward(self, sentences, transitions, y_batch=None, train=True, **kwargs):
-        batch_size, seq_length = sentences.size()
+        batch_size, seq_length = sentences.size()[:2]
 
-        # Build Tokens
-        x = Variable(sentences, volatile=not train)
+        if not self.skip_embedding:
+            # Build Tokens
+            x = Variable(sentences, volatile=not train)
 
-        emb = self.embed(x, train)
+            emb = self.embed(x, train)
+        else:
+            emb = sentences
+
         h = torch.squeeze(torch.sum(emb, dim=1)) / seq_length
         logits = self.run_mlp(h, train)
 
@@ -129,7 +141,7 @@ class SentenceModel(BaseModel):
             pred = logits.data.max(1)[1] # get the index of the max log-probability
             acc = pred.eq(y_batch).sum() / float(y_batch.size(0))
         else:
-            accum_loss = 0.0
+            loss = 0.0
             acc = 0.0
 
         return logits, loss, acc, 0.0, None, None

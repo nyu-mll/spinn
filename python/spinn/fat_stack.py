@@ -352,12 +352,10 @@ class BaseModel(nn.Module):
         self.use_sentence_pair = use_sentence_pair
 
         # RL Params
+        self.rl_baseline = rl_baseline
         self.reinforce_lr = 0.01
         self.mu = 0.1
         self.baseline = 0
-
-        if rl_baseline == "policy":
-            raise NotImplementedError()
 
         self.initial_embeddings = initial_embeddings
         self.classifier_dropout_rate = 1. - classifier_keep_rate
@@ -412,12 +410,40 @@ class BaseModel(nn.Module):
             if self.use_product_feature:
                 features_dim += self.stack_hidden_dim
 
+
         self.mlp = MLP(features_dim, mlp_dim, num_classes, num_mlp_layers, mlp_bn,
             classifier_dropout_rate=self.classifier_dropout_rate)
 
-        # TODO: Add HeKaimingInit in a reset_parameters() method.
+        if rl_baseline == "policy":
+            policy_module = spinn.cbow
 
-        print(self)
+            if use_sentence_pair:
+                policy_net = policy_module.SentencePairModel
+            else:
+                policy_net = policy_module.SentenceModel
+
+            _initial_embeddings = None
+            _mlp_dim = rl_policy_dim
+            _model_dim = word_embedding_dim
+            _num_classes = 1
+
+            # The policy net is naively initialized. Certain features
+            # such as keep_rate, batch_norm, num_mlp_layers,
+            # etc. are simply taken from the hyperparams. We might
+            # want these to be different.
+            self.policy = policy_net(_model_dim, word_embedding_dim, vocab_size,
+             _initial_embeddings, _num_classes,
+             mlp_dim=_mlp_dim,
+             embedding_keep_rate=embedding_keep_rate,
+             classifier_keep_rate=classifier_keep_rate,
+             use_input_norm=use_input_norm,
+             use_sentence_pair=use_sentence_pair,
+             num_mlp_layers=num_mlp_layers,
+             mlp_bn=mlp_bn,
+             use_skips=use_skips,
+             use_encode=False,
+             skip_embedding=True,
+            )
 
 
     def build_example(self, sentences, transitions, train):
@@ -492,6 +518,8 @@ class BaseModel(nn.Module):
         tokens = example.tokens
 
         emb = self.run_embed(tokens, train)
+        if self.rl_baseline == "policy":
+            policy_emb = emb.clone()
         emb = dropout(emb, self.embedding_dropout_rate, train)
 
         batch_size, seq_length, _ = emb.size()
@@ -531,13 +559,14 @@ class BaseModel(nn.Module):
                 self.avg_baseline = self.baseline
                 new_rewards = rewards - self.baseline
             elif rl_baseline == "policy": # Policy Net
-                baseline, baseline_loss = self.run_policy(sentences, transitions, y_batch, train, rewards, rl_style)
+                baseline, policy_loss = self.run_policy(policy_emb, transitions, y_batch, train, rewards, rl_style)
                 self.avg_baseline = baseline.data.mean()
                 new_rewards = rewards - baseline.data
             elif rl_baseline == "greedy": # Greedy Max
-                baseline = self.run_greedy_max(sentences, transitions, y_batch, train, rewards, rl_style)
-                self.avg_baseline = baseline.mean()
-                new_rewards = rewards - baseline
+                raise NotImplementedError()
+                # baseline = self.run_greedy_max(sentences, transitions, y_batch, train, rewards, rl_style)
+                # self.avg_baseline = baseline.mean()
+                # new_rewards = rewards - baseline
             else:
                 raise NotImplementedError()
 
@@ -552,19 +581,22 @@ class BaseModel(nn.Module):
         if hasattr(transition_acc, 'data'):
             transition_acc = transition_acc.data
 
-        if rl_baseline == "policy" and baseline_loss is not None:
-            rl_loss += baseline_loss
+        if rl_baseline == "policy" and policy_loss is not None:
+            rl_loss = (rl_loss, policy_loss)
 
         return y, loss, acc, transition_acc, transition_loss, rl_loss
 
 
     def run_policy(self, sentences, transitions, y_batch, train, rewards, rl_style):
-        if rl_style != "zero-one":
-            raise NotImplementedError("Policy net is only compatible with zero-one loss right now."
-                "It predicts a single value between 0 and 1.")
-        y, _, _, _, _ = self.policy(sentences, transitions, y_batch=None, train=train)
-        pred_reward = F.flatten(F.sigmoid(y)) # Squash between 0 and 1
-        return pred_reward, F.mean_squared_error(pred_reward, rewards)
+        ret = self.policy(sentences, transitions, y_batch=None, train=train)
+        policy_logits = ret[0]
+        if rl_style == "zero-one":
+            return policy_logits, nn.MSELoss()(policy_logits, Variable(rewards, volatile=policy_logits.volatile))
+        elif rl_style == "xent":
+            rewards = F.sigmoid(rewards)
+            return policy_logits, nn.MSELoss()(policy_logits, Variable(rewards, volatile=policy_logits.volatile))
+        else:
+            raise NotImplementedError()
 
 
     def run_greedy_max(self, sentences, transitions, y_batch, train, rewards, rl_style):
@@ -576,8 +608,11 @@ class BaseModel(nn.Module):
 
     def build_rewards(self, logits, y, style="zero-one"):
         if style == "xent":
-            rewards = -1. * F.concat([F.softmax_cross_entropy(logits[i:(i+1)], y[i:(i+1)]).unsqueeze(0)
-                        for i in range(y.shape[0])], axis=0).data
+            batch_size = logits.size(0)
+            rewards = torch.cat([nn.NLLLoss()(ll, Variable(yy)) for ll, yy in
+                        zip(torch.chunk(logits, batch_size), torch.chunk(y, batch_size))], 0).data
+            # We want to maximize reward, so use negative loss.
+            rewards *= -1.0
         elif style == "zero-one":
             rewards = torch.eq(logits.max(1)[1].data, y).float()
         else:

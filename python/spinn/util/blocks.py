@@ -141,6 +141,8 @@ class MLP(nn.Module):
         setattr(self, 'l{}'.format(num_mlp_layers), Linear(features_dim, num_classes,
                 initializer=HeKaimingInit))
 
+        self.nonlinear = F.log_softmax if num_classes >= 2 else F.sigmoid
+
     def forward(self, h, train):
         for i in range(self.num_mlp_layers):
             layer = getattr(self, 'l{}'.format(i))
@@ -152,7 +154,7 @@ class MLP(nn.Module):
             h = dropout(h, self.classifier_dropout_rate, train)
         layer = getattr(self, 'l{}'.format(self.num_mlp_layers))
         h = layer(h)
-        y = F.log_softmax(h)
+        y = self.nonlinear(h)
         return y
 
 

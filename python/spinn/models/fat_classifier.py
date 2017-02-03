@@ -96,14 +96,14 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
             seq_length = eval_X_batch.shape[1]
 
             if X_batch_is_left_padded:
-                eval_X_batch = eval_X_batch[:, seq_length - max_transitions:, :]
+                eval_X_batch = eval_X_batch[:, seq_length - max_transitions:]
             else:
-                eval_X_batch = eval_X_batch[:, :max_transitions, :]
+                eval_X_batch = eval_X_batch[:, :max_transitions]
 
             if transitions_batch_is_left_padded:
-                eval_transitions_batch = eval_transitions_batch[:, seq_length - max_transitions:, :]
+                eval_transitions_batch = eval_transitions_batch[:, seq_length - max_transitions:]
             else:
-                eval_transitions_batch = eval_transitions_batch[:, :max_transitions, :]
+                eval_transitions_batch = eval_transitions_batch[:, :max_transitions]
 
             # Transfer data to tensors.
             eval_X_batch = torch.from_numpy(eval_X_batch).long()
@@ -372,6 +372,8 @@ def run(only_forward=False):
         self.gpu = FLAGS.gpu
     model.apply(set_device)
 
+    logger.Log(model)
+
     def prod(l):
         return reduce(lambda x, y: x * y, l, 1.0)
     total_weights = sum([prod(w.size()) for w in model.parameters() if w.requires_grad])
@@ -397,6 +399,7 @@ def run(only_forward=False):
         accum_xent_cost = deque(maxlen=FLAGS.deq_length)
         accum_trans_cost = deque(maxlen=FLAGS.deq_length)
         accum_rl_cost = deque(maxlen=FLAGS.deq_length)
+        accum_policy_cost = deque(maxlen=FLAGS.deq_length)
         accum_preds = deque(maxlen=FLAGS.deq_length)
         accum_truth = deque(maxlen=FLAGS.deq_length)
         accum_reward = deque(maxlen=FLAGS.deq_length)
@@ -449,6 +452,11 @@ def run(only_forward=False):
                     )
             y, xent_loss, class_acc, transition_acc, transition_loss, rl_loss = ret
 
+            if FLAGS.use_reinforce and FLAGS.rl_baseline == "policy":
+                rl_loss, policy_loss = rl_loss
+            else:
+                policy_loss = 0.0
+
             accum_class_preds.append(y.data.max(1)[1])
             accum_class_truth.append(y_batch)
 
@@ -468,6 +476,10 @@ def run(only_forward=False):
             transition_cost_val = transition_loss.data[0] if transition_loss is not None else 0.0
             rl_cost_val = rl_loss.data[0] if rl_loss is not None else 0.0
             accum_class_acc.append(class_acc)
+            if FLAGS.use_reinforce and FLAGS.rl_baseline == "policy":
+                policy_loss_val = policy_loss.data[0]
+            else:
+                policy_loss_val = 0.0
 
             # Accumulate Total Loss Data
             total_cost_val = 0.0
@@ -476,11 +488,14 @@ def run(only_forward=False):
                 total_cost_val += transition_cost_val
             if FLAGS.use_reinforce:
                 total_cost_val += rl_cost_val
+            if FLAGS.use_reinforce and FLAGS.rl_baseline == "policy":
+                total_cost_val += policy_loss_val
 
             accum_total_cost.append(total_cost_val)
             accum_xent_cost.append(xent_cost_val)
             accum_trans_cost.append(transition_cost_val)
             accum_rl_cost.append(rl_cost_val)
+            accum_policy_cost.append(policy_loss_val)
 
             # Accumulate Total Loss Variable
             total_loss = 0.0
@@ -489,6 +504,8 @@ def run(only_forward=False):
                 total_loss += transition_loss
             if FLAGS.use_reinforce and hasattr(rl_loss, 'backward'):
                 total_loss += rl_loss
+            if FLAGS.use_reinforce and hasattr(policy_loss, 'backward'):
+                total_loss += policy_loss
 
             # Get gradients
             total_loss.backward()
@@ -526,6 +543,7 @@ def run(only_forward=False):
                 avg_xent_cost = np.array(accum_xent_cost).mean()
                 avg_trans_cost = np.array(accum_trans_cost).mean()
                 avg_rl_cost = np.array(accum_rl_cost).mean()
+                avg_policy_cost = np.array(accum_policy_cost).mean()
                 if transition_loss is not None:
                     avg_trans_acc = metrics.accuracy_score(all_preds, all_truth) if len(all_preds) > 0 else 0.0
                 else:
@@ -534,14 +552,14 @@ def run(only_forward=False):
                     avg_new_rew = np.array(accum_new_rew).mean()
                     avg_baseline = np.array(accum_baseline).mean()
                     logger.Log(
-                        "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f Rewards: %5f Time: %5f"
-                        % (step, avg_class_acc, avg_trans_acc, avg_total_cost, avg_xent_cost, avg_trans_cost, avg_rl_cost,
+                        "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f %5f Rewards: %5f Time: %5f"
+                        % (step, avg_class_acc, avg_trans_acc, avg_total_cost, avg_xent_cost, avg_trans_cost, avg_rl_cost, avg_policy_cost,
                             avg_new_rew,
                             avg_time_last_5))
                 else:
                     logger.Log(
-                        "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f Time: %5f"
-                        % (step, avg_class_acc, avg_trans_acc, avg_total_cost, avg_xent_cost, avg_trans_cost, avg_rl_cost,
+                        "Step: %i\tAcc: %f\t%f\tCost: %5f %5f %5f %5f %5f Time: %5f"
+                        % (step, avg_class_acc, avg_trans_acc, avg_total_cost, avg_xent_cost, avg_trans_cost, avg_rl_cost, avg_policy_cost,
                             avg_time_last_5))
                 if FLAGS.transitions_confusion_matrix:
                     cm = metrics.confusion_matrix(
@@ -566,6 +584,7 @@ def run(only_forward=False):
                 accum_xent_cost.clear()
                 accum_trans_cost.clear()
                 accum_rl_cost.clear()
+                accum_policy_cost.clear()
                 accum_preds.clear()
                 accum_truth.clear()
                 accum_reward.clear()
