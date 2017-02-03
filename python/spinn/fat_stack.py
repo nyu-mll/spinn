@@ -275,8 +275,6 @@ class SPINN(nn.Module):
                 transition_logits, Variable(transition_y, volatile=not train))
 
             transition_loss *= self.transition_weight
-        else:
-            transition_loss = None
 
         return [stack[-1] for stack in self.stacks], transition_loss, transition_acc
 
@@ -577,9 +575,6 @@ class BaseModel(nn.Module):
             rl_loss *= self.transition_weight
         else:
             rl_loss = None
-
-        if hasattr(transition_acc, 'data'):
-            transition_acc = transition_acc.data
 
         if rl_baseline == "policy" and policy_loss is not None:
             rl_loss = (rl_loss, policy_loss)

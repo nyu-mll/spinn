@@ -25,6 +25,7 @@ import torch
 
 from spinn.util.data import print_tree
 from sklearn import metrics
+from tensorboard_logger import configure, log_value
 
 
 FLAGS = gflags.FLAGS
@@ -212,10 +213,16 @@ def evaluate(classifier_trainer, eval_set, logger, step, eval_data_limit=-1,
     avg_time = np.array(accum_time).astype(np.float32).mean()
     avg_eval_time.append(avg_time)
     avg_time_last_5 = np.array(avg_eval_time).astype(np.float32).mean()
+    eval_class_acc = acc_accum / eval_batches
 
     logger.Log("Step: %i\tEval acc: %f\t %f\t%s Time: %5f" %
-              (step, acc_accum / eval_batches, trans_acc, eval_set[0], avg_time_last_5))
-    return acc_accum / eval_batches
+              (step, eval_class_acc, trans_acc, eval_set[0], avg_time_last_5))
+
+    if FLAGS.log_metrics:
+        log_value('eval_class_acc', eval_class_acc, step)
+        log_value('eval_trans_acc', trans_acc, step)
+
+    return eval_class_acc
 
 
 def run(only_forward=False):
@@ -235,6 +242,10 @@ def run(only_forward=False):
 
     pp = pprint.PrettyPrinter(indent=4)
     logger.Log("Flag values:\n" + pp.pformat(FLAGS.FlagValuesDict()))
+
+    # Setup tensorboard.
+    if FLAGS.log_metrics:
+        configure("{}/{}".format(FLAGS.metrics_path, FLAGS.experiment_name))
 
     # Load the data.
     raw_training_data, vocabulary = data_manager.load_data(
@@ -522,16 +533,29 @@ def run(only_forward=False):
             # Apply gradients
             classifier_trainer.update()
 
-            end = time.time()
-            avg_time = (end - start) / float(y_batch.size(0))
-            avg_train_time.append(avg_time)
-
             # Accumulate accuracy for current interval.
             acc_val = class_acc
 
             progress_bar.step(
                 i=max(0, step-1) % FLAGS.statistics_interval_steps + 1,
                 total=FLAGS.statistics_interval_steps)
+
+            end = time.time()
+            avg_time = (end - start) / float(y_batch.size(0))
+            avg_train_time.append(avg_time)
+
+            if FLAGS.log_metrics and step % FLAGS.metrics_interval_steps == 0:
+                log_value('class_acc', class_acc, step)
+                log_value('transition_acc', transition_acc, step)
+                log_value('total_cost', total_cost_val, step)
+                log_value('xent_cost_val', xent_cost_val, step)
+                log_value('transition_cost_val', transition_cost_val, step)
+                log_value('rl_cost_val', rl_cost_val, step)
+                log_value('policy_loss_val', policy_loss_val, step)
+                if FLAGS.use_reinforce:
+                    log_value('reward', model.avg_reward, step)
+                    log_value('baseline', model.avg_baseline, step)
+                    log_value('new_rew', model.avg_new_rew, step)
 
             if step % FLAGS.statistics_interval_steps == 0:
                 progress_bar.finish()
@@ -614,6 +638,7 @@ if __name__ == '__main__':
     gflags.DEFINE_bool("transitions_confusion_matrix", False, "Periodically print CM on transitions.")
     gflags.DEFINE_bool("class_confusion_matrix", False, "Periodically print CM on classes.")
     gflags.DEFINE_bool("show_progress_bar", True, "Turn this off when running experiments on HPC.")
+    gflags.DEFINE_bool("log_metrics", True, "Save metrics periodically.")
     gflags.DEFINE_string("branch_name", "", "")
     gflags.DEFINE_string("sha", "", "")
     gflags.DEFINE_boolean("print_tree", False, "Print trees to file.")
@@ -630,7 +655,7 @@ if __name__ == '__main__':
         "a filename or a directory. In the latter case, the experiment name serves as the "
         "base for the filename.")
     gflags.DEFINE_string("log_path", ".", "A directory in which to write logs.")
-    gflags.DEFINE_string("summary_dir", ".", "A directory in which to write summaries.")
+    gflags.DEFINE_string("metrics_path", "./runs", "A directory in which to write metric summaries.")
 
     # Data settings.
     gflags.DEFINE_string("training_data_path", None, "")
@@ -702,6 +727,7 @@ if __name__ == '__main__':
     # Display settings.
     gflags.DEFINE_integer("statistics_interval_steps", 100, "Print training set results at this interval.")
     gflags.DEFINE_integer("eval_interval_steps", 100, "Evaluate at this interval.")
+    gflags.DEFINE_integer("metrics_interval_steps", 10, "Save metrics at this interval.")
 
     gflags.DEFINE_integer("ckpt_interval_steps", 5000, "Update the checkpoint on disk at this interval.")
     gflags.DEFINE_boolean("ckpt_on_best_dev_error", True, "If error on the first eval set (the dev set) is "
