@@ -164,6 +164,20 @@ def to_cuda(var, gpu):
     return var
 
 
+def select_mask(var, index):
+    """
+    Input:
+        var - 2D Tensor
+        index - 1D Byte Tensor
+
+    Returns:
+        2D Tensor that includes rows from var where index was True.
+    """
+    width = var.size(1)
+    mask = index.unsqueeze(1).repeat(1, width)
+    return var[mask].view(-1, width)
+
+
 def select_item(var, index, gpu=-1):
     index_mask = index.view(-1, 1).repeat(1, var.size(1))
     mask = to_cuda(torch.range(0, var.size(1) - 1).long(), gpu)

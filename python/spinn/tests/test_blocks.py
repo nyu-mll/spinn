@@ -66,12 +66,14 @@ class BlocksTestCase(unittest.TestCase):
         assert len(ret) == len(expected)
         assert all(r == e for r, e in zip(ret, expected))
 
-    def test_expand_dims(self):
-        zeros = np.zeros((3,3))
-        var = Variable(torch.from_numpy(zeros))
-        ret = blocks.expand_dims(var, 1)
-        expected = np.expand_dims(zeros, 1)
-        assert all(s1 == s2 for s1, s2 in zip(ret.size(), expected.shape))
+    def test_select_mask(self):
+        t = torch.range(0, 9).view(-1, 2)
+        var = Variable(t)
+        mask = torch.ByteTensor([True, True, False, True, False])
+        ret = blocks.select_mask(var, mask)
+        expected = torch.cat([t[i].unsqueeze(0) for i, m in enumerate(mask) if m], 0)
+        assert all(s1 == s2 for s1, s2 in zip(ret.view(-1).data, expected.view(-1)))
+        assert ret.size() == expected.size()
 
 
 if __name__ == '__main__':

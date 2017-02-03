@@ -14,7 +14,7 @@ import torch.optim as optim
 
 from spinn.util.blocks import LSTMState, Reduce
 from spinn.util.blocks import bundle, unbundle, to_cuda
-from spinn.util.blocks import treelstm, expand_along, dropout, select_item
+from spinn.util.blocks import treelstm, expand_along, dropout, select_item, select_mask
 from spinn.util.blocks import get_c, get_h, get_state
 from spinn.util.blocks import BaseSentencePairTrainer
 from spinn.util.blocks import MLP, Linear, LSTM, LSTMCell, Identity, lstm
@@ -202,11 +202,9 @@ class SPINN(nn.Module):
                         transition_preds = self.validate(transition_arr, transition_preds,
                             self.stacks, self.buffers_t, self.buffers_n)
 
-                    memory["logits"] = transition_hyp
-                    memory["preds"]  = transition_preds
-
                     if not self.use_skips:
-                        hyp_acc = hyp_acc.data.cpu().numpy()[cant_skip]
+                        t_cant_skip = torch.from_numpy(cant_skip.astype(np.int32)).byte()
+                        hyp_acc = select_mask(hyp_acc, t_cant_skip)
                         truth_acc = truth_acc[cant_skip]
 
                         cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
@@ -269,8 +267,8 @@ class SPINN(nn.Module):
             # have different sizes when not using skips.
             hyp_acc, truth_acc, hyp_xent, truth_xent = self.get_statistics()
 
-            t_pred = hyp_acc.argmax(axis=1)
-            transition_acc = np.asarray((t_pred == truth_acc).mean(dtype=np.float32))
+            t_pred = hyp_acc.max(1)[1]
+            transition_acc = np.asarray((t_pred.data.numpy() == truth_acc).mean(dtype=np.float32))
 
             transition_logits = F.log_softmax(hyp_xent)
             transition_y = to_cuda(torch.from_numpy(truth_acc.astype(np.int32)).long(), self.gpu)
@@ -653,9 +651,12 @@ class BaseModel(nn.Module):
 
         # Expand rewards
         if self.spinn.use_skips:
-            rewards = expand_along(rewards.view(-1).cpu().numpy(), np.full(self.spinn.transition_mask.shape, True))
+            seq_length = self.spinn.transition_mask.shape[1]
+            rewards = rewards.view(-1).cpu().numpy().repeat(seq_length)
         else:
-            rewards = expand_along(rewards.view(-1).cpu().numpy(), self.spinn.transition_mask)
+            repeat_mask = self.spinn.transition_mask.sum(axis=1)
+            rewards = rewards.view(-1).cpu().numpy().repeat(repeat_mask, axis=0)
+            # rewards = expand_along(rewards.view(-1).cpu().numpy(), self.spinn.transition_mask)
 
         rl_loss = -1. * torch.dot(log_p_preds, Variable(to_cuda(torch.from_numpy(rewards), self.gpu), volatile=log_p_preds.volatile)) / log_p_preds.size(0)
 
