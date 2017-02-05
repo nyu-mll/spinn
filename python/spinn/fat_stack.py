@@ -204,7 +204,7 @@ class SPINN(nn.Module):
 
                     if not self.use_skips:
                         t_cant_skip = torch.from_numpy(cant_skip.astype(np.int32)).byte()
-                        hyp_acc = select_mask(hyp_acc, t_cant_skip)
+                        hyp_acc = select_mask(hyp_acc, to_cuda(t_cant_skip, self.gpu))
                         truth_acc = truth_acc[cant_skip]
 
                         cant_skip_mask = np.tile(np.expand_dims(cant_skip, axis=1), (1, 2))
@@ -268,7 +268,7 @@ class SPINN(nn.Module):
             hyp_acc, truth_acc, hyp_xent, truth_xent = self.get_statistics()
 
             t_pred = hyp_acc.max(1)[1]
-            transition_acc = np.asarray((t_pred.data.numpy() == truth_acc).mean(dtype=np.float32))
+            transition_acc = np.asarray((t_pred.cpu().data.numpy() == truth_acc).mean(dtype=np.float32))
 
             transition_logits = F.log_softmax(hyp_xent)
             transition_y = to_cuda(torch.from_numpy(truth_acc.astype(np.int32)).long(), self.gpu)
@@ -386,7 +386,7 @@ class BaseModel(nn.Module):
         else:
             self._embed = nn.Embedding(vocab_size, word_embedding_dim)
             self._embed.weight.requires_grad = True
-        
+
         if self.use_encode:
             bi = 2 if self.bi_encode else 1
             self.encode = nn.LSTM(model_dim, model_dim / bi, num_layers=1,
@@ -463,8 +463,8 @@ class BaseModel(nn.Module):
         if hasattr(self, '_embed'):
             emb = self._embed(tokens.view(-1))
         else:
-            emb = Variable(torch.from_numpy(
-                self.vectors.take(tokens.data.numpy().ravel(), axis=0)), volatile=not train)
+            emb = Variable(to_cuda(torch.from_numpy(
+                self.vectors.take(tokens.cpu().data.numpy().ravel(), axis=0)), self.gpu), volatile=not train)
             emb = self.project(emb)
         return emb
 
