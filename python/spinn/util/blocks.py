@@ -132,6 +132,9 @@ class MLP(nn.Module):
         self.classifier_dropout_rate = classifier_dropout_rate
 
         features_dim = mlp_input_dim
+
+        if mlp_bn:
+            self.bn_inp = nn.BatchNorm1d(features_dim)
         for i in range(num_mlp_layers):
             setattr(self, 'l{}'.format(i), Linear(features_dim, mlp_dim,
                 initializer=HeKaimingInit))
@@ -144,6 +147,9 @@ class MLP(nn.Module):
         self.nonlinear = F.log_softmax if num_classes >= 2 else F.sigmoid
 
     def forward(self, h, train):
+        if self.mlp_bn:
+            h = self.bn_inp(h)
+        h = dropout(h, self.classifier_dropout_rate, train)
         for i in range(self.num_mlp_layers):
             layer = getattr(self, 'l{}'.format(i))
             h = layer(h)
