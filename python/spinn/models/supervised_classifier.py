@@ -46,13 +46,13 @@ def run(only_forward=False):
 
     # Load the data.
     raw_training_data, vocabulary = data_manager.load_data(
-        FLAGS.training_data_path, FLAGS.lowercase)
+        os.path.expanduser(FLAGS.training_data_path), FLAGS.lowercase)
 
     # Load the eval data.
     raw_eval_sets = []
     if FLAGS.eval_data_path:
         for eval_filename in FLAGS.eval_data_path.split(":"):
-            raw_eval_data, _ = data_manager.load_data(eval_filename, FLAGS.lowercase)
+            raw_eval_data, _ = data_manager.load_data(os.path.expanduser(eval_filename), FLAGS.lowercase)
             raw_eval_sets.append((eval_filename, raw_eval_data))
 
     # Prepare the vocabulary.

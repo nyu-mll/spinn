@@ -33,6 +33,8 @@ def build_model(data_manager, initial_embeddings, vocab_size, num_classes, FLAGS
          embedding_keep_rate=FLAGS.embedding_keep_rate,
          tracking_lstm_hidden_dim=FLAGS.tracking_lstm_hidden_dim,
          transition_weight=FLAGS.transition_weight,
+         use_attention=FLAGS.use_attention,
+         attention_dim=FLAGS.attention_dim,
          encode_style=FLAGS.encode_style,
          encode_reverse=FLAGS.encode_reverse,
          encode_bidirectional=FLAGS.encode_bidirectional,
@@ -476,6 +478,8 @@ class BaseModel(nn.Module):
                  embedding_keep_rate=None,
                  tracking_lstm_hidden_dim=4,
                  transition_weight=None,
+                 use_attention=None,
+                 attention_dim=None,
                  encode_style=None,
                  encode_reverse=None,
                  encode_bidirectional=None,
@@ -534,6 +538,12 @@ class BaseModel(nn.Module):
         # Create dynamic embedding layer.
         self.embed = Embed(input_dim, vocab.size, vectors=vocab.vectors, use_projection=use_projection)
 
+        self.use_attention = use_attention
+        if use_attention:
+            self.attention_keys = Linear()(hidden_dim, attention_dim, bias=True)
+            self.attention_query = Linear()(args.tracker_size, attention_dim, bias=False)
+            self.attention_mix = nn.Linear(hidden_dim * 2, hidden_dim)
+
         # Optionally build input encoder.
         if encode_style is not None:
             self.encode = self.build_input_encoder(encode_style=encode_style,
@@ -581,14 +591,49 @@ class BaseModel(nn.Module):
         h_list, transition_acc, transition_loss = self.spinn(example,
                                use_internal_parser=use_internal_parser,
                                validate_transitions=validate_transitions)
-        h = self.wrap(h_list)
-        return h, transition_acc, transition_loss
+        return h_list, transition_acc, transition_loss
+
+    def run_attention(self, states_list):
+        keys = [m['top_stack_1'].h for m in self.spinn.memories if 'top_stack_1' in m]
+        seq_length = len(keys)
+        batch_size, dim = keys[0].size()
+
+        h = get_h(torch.cat(states_list, 0), self.hidden_dim)
+        keys = torch.cat(keys + [h], 1).view(-1, dim)
+        query = self.spinn.tracker.h
+
+        e = self.attention_keys(keys)
+        q = self.attention_query(query)
+
+        keys_list = torch.chunk(keys, batch_size, 0)
+        q_list = torch.chunk(q, batch_size, 0)
+        e_list = torch.chunk(e, batch_size, 0)
+
+        contexts = []
+        for i in range(batch_size):
+            nt_i = self.spinn.buffers_n[i] * 2 - 1
+            keys_i = keys_list[i][-nt_i:]
+            q_i = q_list[i]
+            e_i = e_list[i][-nt_i:]
+
+            score = (q_i.expand_as(e_i) * e_i).sum(1).t()
+            normalized_score = F.softmax(score)
+
+            context = keys_i * normalized_score.t().expand_as(keys_i)
+            context = context.sum(0)
+            contexts.append(context)
+
+        contexts = torch.cat(contexts, 0)
+        mix_inp = torch.cat([contexts, h], 1)
+        mix = F.tanh(self.attention_mix(mix_inp))
+
+        return torch.chunk(mix, batch_size, 0)
 
     def output_hook(self, output, sentences, transitions, y_batch=None, embeds=None):
         pass
 
-    def forward(self, sentences, transitions, y_batch=None,
-                 use_internal_parser=False, validate_transitions=True):
+    def forward(self, sentences, transitions, y_batch=None, use_internal_parser=False,
+                validate_transitions=True):
         example = self.unwrap(sentences, transitions)
 
         b, l = example.tokens.size()[:2]
@@ -608,7 +653,15 @@ class BaseModel(nn.Module):
 
         example.bufs = buffers
 
-        h, transition_acc, transition_loss = self.run_spinn(example, use_internal_parser, validate_transitions)
+        h_list, transition_acc, transition_loss = self.run_spinn(example, use_internal_parser, validate_transitions)
+
+        if self.use_attention:
+            h_list = self.run_attention(h_list)
+            select = lambda x, _: x
+        else:
+            select = get_h
+
+        h = self.wrap(h_list, select)
 
         self.spinn_outp = h
 
@@ -631,10 +684,10 @@ class BaseModel(nn.Module):
             return self.unwrap_sentence_pair(sentences, transitions)
         return self.unwrap_sentence(sentences, transitions)
 
-    def wrap(self, h_list):
+    def wrap(self, h_list, select):
         if self.use_sentence_pair:
-            return self.wrap_sentence_pair(h_list)
-        return self.wrap_sentence(h_list)
+            return self.wrap_sentence_pair(h_list, select)
+        return self.wrap_sentence(h_list, select)
 
     # --- Sentence Model Specific ---
 
@@ -653,9 +706,9 @@ class BaseModel(nn.Module):
 
         return example
 
-    def wrap_sentence(self, h_list):
+    def wrap_sentence(self, h_list, select):
         batch_size = len(h_list) / 2
-        h = get_h(torch.cat(h_list, 0), self.hidden_dim)
+        h = select(torch.cat(h_list, 0), self.hidden_dim)
         return [h]
 
     # --- Sentence Pair Model Specific ---
@@ -679,8 +732,8 @@ class BaseModel(nn.Module):
 
         return example
 
-    def wrap_sentence_pair(self, h_list):
+    def wrap_sentence_pair(self, h_list, select):
         batch_size = len(h_list) / 2
-        h_premise = get_h(torch.cat(h_list[:batch_size], 0), self.hidden_dim)
-        h_hypothesis = get_h(torch.cat(h_list[batch_size:], 0), self.hidden_dim)
+        h_premise = select(torch.cat(h_list[:batch_size], 0), self.hidden_dim)
+        h_hypothesis = select(torch.cat(h_list[batch_size:], 0), self.hidden_dim)
         return [h_premise, h_hypothesis]

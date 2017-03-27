@@ -33,6 +33,8 @@ def build_model(data_manager, initial_embeddings, vocab_size, num_classes, FLAGS
          mlp_dim=FLAGS.mlp_dim,
          num_mlp_layers=FLAGS.num_mlp_layers,
          mlp_bn=FLAGS.mlp_bn,
+         use_attention=FLAGS.use_attention,
+         attention_dim=FLAGS.attention_dim,
         )
 
 
@@ -49,6 +51,8 @@ class BaseModel(nn.Module):
                  mlp_dim=None,
                  num_mlp_layers=None,
                  mlp_bn=None,
+                 use_attention=None,
+                 attention_dim=None,
                  **kwargs
                 ):
         super(BaseModel, self).__init__()
@@ -77,6 +81,13 @@ class BaseModel(nn.Module):
         self.mlp = MLP(mlp_input_dim, mlp_dim, num_classes,
             num_mlp_layers, mlp_bn, classifier_dropout_rate)
 
+        # Attention.
+        self.use_attention = use_attention
+        if use_attention:
+            self.attention_keys = nn.Linear(model_dim, attention_dim)
+            self.attention_query = nn.Linear(model_dim, attention_dim)
+            self.attention_mix = nn.Linear(model_dim * 2, model_dim)
+
     def run_rnn(self, x):
         batch_size, seq_len, model_dim = x.data.size()
 
@@ -92,7 +103,7 @@ class BaseModel(nn.Module):
         #   c_0   => (num_layers x num_directions[1,2]) x batch_size x model_dim
         output, (hn, cn) = self.rnn(x, (h0, c0))
 
-        return hn
+        return output, (hn, cn)
 
     def run_embed(self, x):
         batch_size, seq_length = x.size()
@@ -102,14 +113,49 @@ class BaseModel(nn.Module):
 
         return emb
 
+    def run_attention(self, output, h_flat):
+        batch_size, seq_len, hidden_dim = output.size()
+
+        # Flatten states.
+        keys = output.contiguous().view(batch_size * seq_len, -1)
+
+        e = self.attention_keys(keys)
+        q = self.attention_query(h_flat)
+
+        keys_list = torch.chunk(keys, batch_size, 0)
+        q_list = torch.chunk(q, batch_size, 0)
+        e_list = torch.chunk(e, batch_size, 0)
+
+        contexts = []
+        for i in range(batch_size):
+            keys_i = keys_list[i]
+            q_i = q_list[i]
+            e_i = e_list[i]
+
+            score = (q_i.expand_as(e_i) * e_i).sum(1).t()
+            normalized_score = F.softmax(score)
+
+            context = keys_i * normalized_score.t().expand_as(keys_i)
+            context = context.sum(0)
+            contexts.append(context)
+
+        contexts = torch.cat(contexts, 0)
+        mix_inp = torch.cat([contexts, h_flat], 1)
+        mix = F.tanh(self.attention_mix(mix_inp))
+
+        return mix
+
     def forward(self, sentences, transitions, y_batch=None, **kwargs):
         # Useful when investigating dynamic batching.
         self.seq_lengths = sentences.shape[1] - (sentences == 0).sum(1)
 
         x = self.unwrap(sentences, transitions)
         emb = self.run_embed(x)
-        hh = torch.squeeze(self.run_rnn(emb))
-        h = self.wrap(hh)
+        output, (h, c) = self.run_rnn(emb)
+        h = torch.squeeze(h)
+        if self.use_attention:
+            h = self.run_attention(output, h)
+        h = self.wrap(h)
         output = self.mlp(h)
 
         return output

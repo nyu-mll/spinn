@@ -308,6 +308,10 @@ def get_flags():
         "Use cell output as feature for transition net.")
     gflags.DEFINE_boolean("use_lengths", False, "The transition net will be biased.")
 
+    # Attention settings.
+    gflags.DEFINE_boolean("use_attention", False, "Attend over hidden states.")
+    gflags.DEFINE_integer("attention_dim", 128, "Size for output of attention networks.")
+
     # Encode settings.
     gflags.DEFINE_boolean("use_encode", False, "Encode embeddings with sequential network.")
     gflags.DEFINE_enum("encode_style", None, ["LSTM", "CNN", "QRNN"], "Encode embeddings with sequential context.")
