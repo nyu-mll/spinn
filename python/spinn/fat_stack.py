@@ -151,9 +151,9 @@ class SPINN(nn.Module):
         #   used as input to the tracker.
         # - For the first two steps, the stack would be empty, but we add
         #   zeros so that the tracker still gets input.
-        zeros = self.zeros = to_gpu(Variable(torch.from_numpy(
+        zeros = self.zeros = Variable(torch.from_numpy(
             np.zeros(self.bufs[0][0].size(), dtype=np.float32)),
-            volatile=self.bufs[0][0].volatile))
+            volatile=self.bufs[0][0].volatile)
 
         # Initialize Buffers. Trim unused tokens.
         self.bufs = [[zeros] + b[-b_n:] for b, b_n in zip(self.bufs, self.n_tokens)]
@@ -284,6 +284,8 @@ class SPINN(nn.Module):
                 lefts, rights, trackings))
             for stack in stacks:
                 new_stack_item = next(reduced)
+                if self.debug:
+                    assert isinstance(new_stack_item.data, torch.FloatTensor), "All stack items should live on the CPU."
                 stack.append(new_stack_item)
 
     def reduce_phase_hook(self, lefts, rights, trackings, reduce_stacks):
@@ -557,9 +559,9 @@ class BaseModel(nn.Module):
                 features.append(h_prem - h_hyp)
             if self.use_product_feature:
                 features.append(h_prem * h_hyp)
-            features = torch.cat(features, 1)
+            features = to_gpu(torch.cat(features, 1))
         else:
-            features = h[0]
+            features = to_gpu(h[0])
         return features
 
     def build_spinn(self, args, vocab, predict_use_cell):

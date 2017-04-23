@@ -70,7 +70,7 @@ def to_gpu(var):
 
 
 def to_cpu(var):
-    return to_cuda(var, -1)
+    return var.cpu()
 
 
 def arr_to_gpu(arr):
