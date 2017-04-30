@@ -23,6 +23,14 @@ from spinn.util.catalan import ShiftProbabilities
 from spinn.data import T_SHIFT, T_REDUCE, T_SKIP
 
 
+"""
+Optimization Tips
+
+- pass indexes instead of stack items / stacks. Applies to:
+    - t_shift/t_reduce/shift_phase/reduce_phase
+"""
+
+
 def build_model(data_manager, initial_embeddings, vocab_size, num_classes, FLAGS, context_args, composition_args):
     model_cls = BaseModel
     use_sentence_pair = data_manager.SENTENCE_PAIR_DATA
@@ -245,11 +253,6 @@ class SPINN(nn.Module):
 
         return transitions, t_strength
 
-    def t_shift(self, buf, stack, tracking, buf_tops, trackings):
-        """SHIFT: Should dequeue buffer and item to stack."""
-        buf_tops.append(buf.pop() if len(buf) > 0 else self.zeros)
-        trackings.append(tracking)
-
     def t_reduce(self, buf, stack, tracking, lefts, rights, trackings):
         """REDUCE: Should compose top two items of the stack into new item."""
 
@@ -272,12 +275,15 @@ class SPINN(nn.Module):
         """SKIP: Acts as padding and is a noop."""
         pass
 
-    def shift_phase(self, tops, trackings, stacks, idxs):
+    def shift_phase(self, i_tops, trackings, i_stacks, idxs):
         """SHIFT: Should dequeue buffer and item to stack."""
+        stacks = self.stacks
+        bufs = self.bufs
         if len(stacks) > 0:
-            shift_candidates = iter(tops)
-            for stack in stacks:
-                new_stack_item = next(shift_candidates)
+            for i_b, i_s in zip(i_tops, i_stacks):
+                buf = bufs[i_b]
+                stack = stacks[i_s]
+                new_stack_item = buf.pop() if len(buf) > 0 else self.zeros
                 stack.append(new_stack_item)
 
     def reduce_phase(self, lefts, rights, trackings, stacks):
@@ -305,7 +311,7 @@ class SPINN(nn.Module):
         # ===============
 
         with Profiler("transition_loop"):
-            for t_step in range(num_transitions):
+            for t_step in xrange(num_transitions):
                 with Profiler("transitions_arr", cache=True):
                     transitions = inp_transitions[:, t_step]
                     transition_arr = list(transitions)
@@ -410,20 +416,26 @@ class SPINN(nn.Module):
                     # For REDUCE
                     r_stacks, r_lefts, r_rights, r_trackings = [], [], [], []
 
-                    batch = zip(transition_arr, self.bufs, self.stacks,
-                                self.tracker.states if hasattr(self, 'tracker') and self.tracker.h is not None
-                                else itertools.repeat(None))
+                    with Profiler("zip_batch", cache=True):
+                        batch = zip(transition_arr, self.bufs, self.stacks,
+                                    self.tracker.states if hasattr(self, 'tracker') and self.tracker.h is not None
+                                    else itertools.repeat(None))
 
-                    for batch_idx, (transition, buf, stack, tracking) in enumerate(batch):
-                        if transition == T_SHIFT: # shift
-                            self.t_shift(buf, stack, tracking, s_tops, s_trackings)
-                            s_idxs.append(batch_idx)
-                            s_stacks.append(stack)
-                        elif transition == T_REDUCE: # reduce
-                            self.t_reduce(buf, stack, tracking, r_lefts, r_rights, r_trackings)
-                            r_stacks.append(stack)
-                        elif transition == T_SKIP: # skip
-                            self.t_skip()
+                    with Profiler("loop", cache=True):
+                        for batch_idx, (transition, buf, stack, tracking) in enumerate(batch):
+                            if transition == T_SHIFT: # shift
+                                with Profiler("t_shift", cache=True):
+                                    s_tops.append(batch_idx)
+                                    s_trackings.append(batch_idx)
+                                    s_stacks.append(batch_idx)
+                                    s_idxs.append(batch_idx)
+                            elif transition == T_REDUCE: # reduce
+                                with Profiler("t_reduce", cache=True):
+                                    self.t_reduce(buf, stack, tracking, r_lefts, r_rights, r_trackings)
+                                with Profiler("t_reduce_append", cache=True):
+                                    r_stacks.append(stack)
+                            elif transition == T_SKIP: # skip
+                                self.t_skip()
 
                 # Action Phase
                 # ============
@@ -614,27 +626,19 @@ class BaseModel(nn.Module):
             with Profiler("dropout"):
                 embeds = F.dropout(embeds, self.embedding_dropout_rate, training=self.training)
 
-            with Profiler("alternative"):
+            # Make Buffers
+            with Profiler("buffers"):
                 with Profiler("chunk"):
                     ee = torch.chunk(embeds, b * l, 0)
                 with Profiler("reverse"):
                     ee = ee[::-1]
                 with Profiler("make list"):
                     bb = []
-                    for ii in range(b):
-                        ex = ee[ii*l:(ii+1)*l]
+                    for ii in xrange(b):
+                        ex = list(ee[ii*l:(ii+1)*l])
                         bb.append(ex)
                 with Profiler("reverse"):
-                    bb = bb[::-1]
-
-            # Make Buffers
-            with Profiler("main"):
-                with Profiler("chunk"):
-                    embeds = torch.chunk(to_cpu(embeds), b, 0)
-                with Profiler("chunk embeds"):
-                    embeds = [torch.chunk(x, l, 0) for x in embeds]
-                with Profiler("make list"):
-                    buffers = [list(reversed(x)) for x in embeds]
+                    buffers = bb[::-1]
 
         example.bufs = buffers
 
@@ -652,7 +656,7 @@ class BaseModel(nn.Module):
 
             output = self.mlp(features)
 
-        self.output_hook(output, sentences, transitions, y_batch, embeds)
+        self.output_hook(output, sentences, transitions, y_batch, None)
 
         return output
 
