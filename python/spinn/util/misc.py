@@ -44,12 +44,13 @@ class Profiler:
             self.end = time.clock()
             self.interval = self.end - self.start
             if self.cache:
-                PROFILE_SCOPE_CACHE[-1][self.name] = PROFILE_SCOPE_CACHE[-1].get(self.name, 0) + self.interval # accumulate timing
+                key = "[{}]".format("][".join(PROFILE_SCOPE))
+                PROFILE_SCOPE_CACHE[-1][key] = PROFILE_SCOPE_CACHE[-1].get(key, 0) + self.interval # accumulate timing
             else:
                 print("TIMING [{}]: {}".format("][".join(PROFILE_SCOPE), self.interval))
                 dd = PROFILE_SCOPE_CACHE.pop()
                 for kk, vv in dd.items():
-                    print("TIMING [{}] {} {}".format("][".join(PROFILE_SCOPE), kk, vv))
+                    print("TIMING-CACHE {} {}".format(kk, vv))
         if self.memory:
             # import ipdb; ipdb.set_trace()
             self.end_mem = mem_check_usage()

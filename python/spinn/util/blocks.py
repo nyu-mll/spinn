@@ -9,6 +9,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.optim as optim
 
+from spinn.util.misc import Profiler
 from spinn.util.misc import recursively_set_device
 
 
@@ -186,10 +187,18 @@ def unbundle(state):
     """
     if state is None:
         return itertools.repeat(None)
-    if not isinstance(state, LSTMState):
-        state = LSTMState(state)
-    return torch.chunk(
-        state.both, state.both.data.size()[0], 0)
+    with Profiler("unbundle_lstm_state", cache=True):
+        if not isinstance(state, LSTMState):
+            state = LSTMState(state)
+    with Profiler("unbundle_both", cache=True):        
+        both = state.both
+        both_dim = state.both.data.size()[0]
+    with Profiler("unbundle_chunk", cache=True):
+        # import ipdb; ipdb.set_trace()
+        both = both.unsqueeze(1)
+        ret = [both[ii] for ii in xrange(both_dim)]
+        # ret = torch.chunk(both, both_dim, 0)
+    return ret
 
 
 def extract_gates(x, n):

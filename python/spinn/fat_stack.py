@@ -107,7 +107,9 @@ class Tracker(nn.Module):
 
     @property
     def states(self):
-        return unbundle((self.c, self.h))
+        with Profiler("tracker_unbundle", cache=True):
+            ret = unbundle((self.c, self.h))
+        return ret
 
     @states.setter
     def states(self, state_iter):
@@ -253,48 +255,42 @@ class SPINN(nn.Module):
 
         return transitions, t_strength
 
-    def t_reduce(self, buf, stack, tracking, lefts, rights, trackings):
-        """REDUCE: Should compose top two items of the stack into new item."""
-
-        # The right-most input will be popped first.
-        for reduce_inp in [rights, lefts]:
-            if len(stack) > 0:
-                reduce_inp.append(stack.pop())
-            else:
-                if self.debug:
-                    raise IndexError
-                # If we try to Reduce, but there are less than 2 items on the stack,
-                # then treat any available item as the right input, and use zeros
-                # for any other inputs.
-                # NOTE: Only happens on cropped data.
-                reduce_inp.append(self.zeros)
-
-        trackings.append(tracking)
-
     def t_skip(self):
         """SKIP: Acts as padding and is a noop."""
         pass
 
-    def shift_phase(self, i_tops, trackings, i_stacks, idxs):
+    def shift_phase(self, i_bufs, trackings, i_stacks, idxs):
         """SHIFT: Should dequeue buffer and item to stack."""
         stacks = self.stacks
         bufs = self.bufs
-        if len(stacks) > 0:
-            for i_b, i_s in zip(i_tops, i_stacks):
+        if len(i_stacks) > 0:
+            for i_b, i_s in zip(i_bufs, i_stacks):
                 buf = bufs[i_b]
                 stack = stacks[i_s]
                 new_stack_item = buf.pop() if len(buf) > 0 else self.zeros
                 stack.append(new_stack_item)
 
-    def reduce_phase(self, lefts, rights, trackings, stacks):
-        if len(stacks) > 0:
+    def reduce_phase(self, i_bufs, i_trackings, i_stacks):
+        if len(i_stacks) > 0:
+            bufs = self.bufs
+            trackings = self.trackings
+            stacks = self.stacks
+
+            def pop(buf):
+                return buf.pop() if len(buf) > 0 else self.zeros
+
+            rights = [pop(bufs[ii]) for ii in i_bufs]
+            lefts = [pop(bufs[ii]) for ii in i_bufs]
+            trackings = [trackings[ii] for ii in i_trackings]
+
             reduced = iter(self.reduce(
                 lefts, rights, trackings))
-            for stack in stacks:
+            for i_s in i_stacks:
+                stack = self.stacks[i_s]
                 new_stack_item = next(reduced)
                 stack.append(new_stack_item)
 
-    def reduce_phase_hook(self, lefts, rights, trackings, reduce_stacks):
+    def reduce_phase_hook(self, bufs, trackings, reduce_stacks):
         pass
 
     def loss_phase_hook(self):
@@ -414,15 +410,17 @@ class SPINN(nn.Module):
                     s_stacks, s_tops, s_trackings, s_idxs = [], [], [], []
 
                     # For REDUCE
-                    r_stacks, r_lefts, r_rights, r_trackings = [], [], [], []
+                    r_stacks, r_bufs, r_trackings = [], [], []
 
                     with Profiler("zip_batch", cache=True):
-                        batch = zip(transition_arr, self.bufs, self.stacks,
-                                    self.tracker.states if hasattr(self, 'tracker') and self.tracker.h is not None
-                                    else itertools.repeat(None))
+                        batch = zip(transition_arr, self.bufs, self.stacks)
+                        if hasattr(self, 'tracker') and self.tracker.h is not None:
+                            self.trackings = self.tracker.states
+                        else:
+                            self.trackings = [None] * sub_batch_size
 
                     with Profiler("loop", cache=True):
-                        for batch_idx, (transition, buf, stack, tracking) in enumerate(batch):
+                        for batch_idx, (transition, buf, stack) in enumerate(batch):
                             if transition == T_SHIFT: # shift
                                 with Profiler("t_shift", cache=True):
                                     s_tops.append(batch_idx)
@@ -431,19 +429,21 @@ class SPINN(nn.Module):
                                     s_idxs.append(batch_idx)
                             elif transition == T_REDUCE: # reduce
                                 with Profiler("t_reduce", cache=True):
-                                    self.t_reduce(buf, stack, tracking, r_lefts, r_rights, r_trackings)
-                                with Profiler("t_reduce_append", cache=True):
-                                    r_stacks.append(stack)
-                            elif transition == T_SKIP: # skip
-                                self.t_skip()
+                                    r_trackings.append(batch_idx)
+                                    r_stacks.append(batch_idx)
+                                    r_bufs.append(batch_idx)
+                            # elif transition == T_SKIP: # skip
+                            #     self.t_skip()
 
                 # Action Phase
                 # ============
 
                 with Profiler("action", cache=True):
-                    self.shift_phase(s_tops, s_trackings, s_stacks, s_idxs)
-                    self.reduce_phase(r_lefts, r_rights, r_trackings, r_stacks)
-                    self.reduce_phase_hook(r_lefts, r_rights, r_trackings, r_stacks)
+                    with Profiler("shift", cache=True):
+                        self.shift_phase(s_tops, s_trackings, s_stacks, s_idxs)
+                    with Profiler("reduce", cache=True):
+                        self.reduce_phase(r_bufs, r_trackings, r_stacks)
+                    self.reduce_phase_hook(r_bufs, r_trackings, r_stacks)
 
                 # Memory Phase
                 # ============
