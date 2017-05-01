@@ -8,6 +8,9 @@ import sys
 import numpy as np
 
 
+from spinn.util.misc import Profiler
+
+
 from spinn.data import T_SHIFT, T_REDUCE, T_SKIP
 
 # With loaded embedding matrix, the padding vector will be initialized to zero
@@ -255,16 +258,18 @@ def MakeTrainingIterator(sources, batch_size, smart_batches=True, use_peano=True
         random.shuffle(order)
 
         while True:
-            idx += 1
-            if idx >= num_batches:
-                # Start another epoch.
-                batches = build_batches()
-                num_batches = len(batches)
-                idx = 0
-                order = range(num_batches)
-                random.shuffle(order)
-            batch_indices = batches[order[idx]]
-            yield tuple(source[batch_indices] for source in sources)
+            with Profiler("batch_it"):
+                idx += 1
+                if idx >= num_batches:
+                    # Start another epoch.
+                    batches = build_batches()
+                    num_batches = len(batches)
+                    idx = 0
+                    order = range(num_batches)
+                    random.shuffle(order)
+                batch_indices = batches[order[idx]]
+                ret = tuple(source[batch_indices] for source in sources)
+            yield ret
 
     def data_iter():
         dataset_size = len(sources[0])

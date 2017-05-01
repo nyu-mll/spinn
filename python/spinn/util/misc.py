@@ -1,6 +1,63 @@
 import numpy as np
-from collections import deque
+from collections import deque, OrderedDict
 import os
+
+import time
+import psutil
+# import resource
+# import objgraph
+
+
+PROFILE_SCOPE = []
+PROFILE_SCOPE_CACHE = []
+
+
+def mem_check_usage():
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss
+
+
+class Profiler:
+    def __init__(self, name="profiler", time=True, memory=False, cache=False):
+        self.name = name
+        self.time = time
+        self.memory = memory
+        self.cache = cache
+
+    def __enter__(self):
+        global PROFILE_SCOPE
+        global PROFILE_SCOPE_CACHE
+        if not self.cache:
+            PROFILE_SCOPE_CACHE.append(OrderedDict())
+        PROFILE_SCOPE.append(self.name)
+        if self.time:
+            self.start = time.clock()
+        if self.memory:
+            self.start_mem = mem_check_usage()
+            # objgraph.show_growth()
+        return self
+
+    def __exit__(self, *args):
+        global PROFILE_SCOPE
+        global PROFILE_SCOPE_CACHE
+        if self.time:
+            self.end = time.clock()
+            self.interval = self.end - self.start
+            if self.cache:
+                key = "[{}]".format("][".join(PROFILE_SCOPE))
+                PROFILE_SCOPE_CACHE[-1][key] = PROFILE_SCOPE_CACHE[-1].get(key, 0) + self.interval # accumulate timing
+            else:
+                print("TIMING [{}]: {}".format("][".join(PROFILE_SCOPE), self.interval))
+                dd = PROFILE_SCOPE_CACHE.pop()
+                for kk, vv in dd.items():
+                    print("TIMING-CACHE {} {}".format(kk, vv))
+        if self.memory:
+            # import ipdb; ipdb.set_trace()
+            self.end_mem = mem_check_usage()
+            self.interval_mem = self.end_mem - self.start_mem
+            print("MEMORY [{}]: i{} s{} e{}".format("][".join(PROFILE_SCOPE), self.interval_mem, self.start_mem, self.end_mem))
+            # objgraph.show_growth()
+        PROFILE_SCOPE.pop()
 
 
 class GenericClass(object):

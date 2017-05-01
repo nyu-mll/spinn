@@ -10,6 +10,8 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.optim as optim
 
+from spinn.util.misc import Profiler
+
 from spinn.util.blocks import LSTMState, Embed, MLP, Linear, LSTM
 from spinn.util.blocks import reverse_tensor
 from spinn.util.blocks import bundle, unbundle, to_cpu, to_gpu, treelstm, lstm
@@ -19,6 +21,14 @@ from spinn.util.blocks import HeKaimingInitializer
 from spinn.util.catalan import ShiftProbabilities
 
 from spinn.data import T_SHIFT, T_REDUCE, T_SKIP
+
+
+"""
+Optimization Tips
+
+- pass indexes instead of stack items / stacks. Applies to:
+    - t_shift/t_reduce/shift_phase/reduce_phase
+"""
 
 
 def build_model(data_manager, initial_embeddings, vocab_size, num_classes, FLAGS, context_args, composition_args):
@@ -97,7 +107,9 @@ class Tracker(nn.Module):
 
     @property
     def states(self):
-        return unbundle((self.c, self.h))
+        with Profiler("tracker_unbundle", cache=True):
+            ret = unbundle((self.c, self.h))
+        return ret
 
     @states.setter
     def states(self, state_iter):
@@ -243,50 +255,42 @@ class SPINN(nn.Module):
 
         return transitions, t_strength
 
-    def t_shift(self, buf, stack, tracking, buf_tops, trackings):
-        """SHIFT: Should dequeue buffer and item to stack."""
-        buf_tops.append(buf.pop() if len(buf) > 0 else self.zeros)
-        trackings.append(tracking)
-
-    def t_reduce(self, buf, stack, tracking, lefts, rights, trackings):
-        """REDUCE: Should compose top two items of the stack into new item."""
-
-        # The right-most input will be popped first.
-        for reduce_inp in [rights, lefts]:
-            if len(stack) > 0:
-                reduce_inp.append(stack.pop())
-            else:
-                if self.debug:
-                    raise IndexError
-                # If we try to Reduce, but there are less than 2 items on the stack,
-                # then treat any available item as the right input, and use zeros
-                # for any other inputs.
-                # NOTE: Only happens on cropped data.
-                reduce_inp.append(self.zeros)
-
-        trackings.append(tracking)
-
     def t_skip(self):
         """SKIP: Acts as padding and is a noop."""
         pass
 
-    def shift_phase(self, tops, trackings, stacks, idxs):
+    def shift_phase(self, i_bufs, trackings, i_stacks, idxs):
         """SHIFT: Should dequeue buffer and item to stack."""
-        if len(stacks) > 0:
-            shift_candidates = iter(tops)
-            for stack in stacks:
-                new_stack_item = next(shift_candidates)
+        stacks = self.stacks
+        bufs = self.bufs
+        if len(i_stacks) > 0:
+            for i_b, i_s in zip(i_bufs, i_stacks):
+                buf = bufs[i_b]
+                stack = stacks[i_s]
+                new_stack_item = buf.pop() if len(buf) > 0 else self.zeros
                 stack.append(new_stack_item)
 
-    def reduce_phase(self, lefts, rights, trackings, stacks):
-        if len(stacks) > 0:
+    def reduce_phase(self, i_bufs, i_trackings, i_stacks):
+        if len(i_stacks) > 0:
+            bufs = self.bufs
+            trackings = self.trackings
+            stacks = self.stacks
+
+            def pop(buf):
+                return buf.pop() if len(buf) > 0 else self.zeros
+
+            rights = [pop(bufs[ii]) for ii in i_bufs]
+            lefts = [pop(bufs[ii]) for ii in i_bufs]
+            trackings = [trackings[ii] for ii in i_trackings]
+
             reduced = iter(self.reduce(
                 lefts, rights, trackings))
-            for stack in stacks:
+            for i_s in i_stacks:
+                stack = self.stacks[i_s]
                 new_stack_item = next(reduced)
                 stack.append(new_stack_item)
 
-    def reduce_phase_hook(self, lefts, rights, trackings, reduce_stacks):
+    def reduce_phase_hook(self, bufs, trackings, reduce_stacks):
         pass
 
     def loss_phase_hook(self):
@@ -302,166 +306,190 @@ class SPINN(nn.Module):
         # Transition Loop
         # ===============
 
-        for t_step in range(num_transitions):
-            transitions = inp_transitions[:, t_step]
-            transition_arr = list(transitions)
-            sub_batch_size = len(transition_arr)
+        with Profiler("transition_loop"):
+            for t_step in xrange(num_transitions):
+                with Profiler("transitions_arr", cache=True):
+                    transitions = inp_transitions[:, t_step]
+                    transition_arr = list(transitions)
+                    sub_batch_size = len(transition_arr)
 
-            # A mask based on SKIP transitions.
-            cant_skip = np.array(transitions) != T_SKIP
-            must_skip = np.array(transitions) == T_SKIP
+                with Profiler("cant_skip", cache=True):
+                    # A mask based on SKIP transitions.
+                    cant_skip = np.array(transitions) != T_SKIP
+                    must_skip = np.array(transitions) == T_SKIP
 
-            # Memories
-            # ========
-            # Keep track of key values to determine accuracy and loss.
-            self.memory = {}
+                # Memories
+                # ========
+                # Keep track of key values to determine accuracy and loss.
+                self.memory = {}
 
-            # Prepare tracker input.
-            if self.debug and any(len(buf) < 1 or len(stack) for buf, stack in zip(self.bufs, self.stacks)):
-                # To elaborate on this exception, when cropping examples it is possible
-                # that your first 1 or 2 actions is a reduce action. It is unclear if this
-                # is a bug in cropping or a bug in how we think about cropping. In the meantime,
-                # turn on the truncate batch flag, and set the eval_seq_length very high.
-                raise IndexError("Warning: You are probably trying to encode examples"
-                      "with cropped transitions. Although, this is a reasonable"
-                      "feature, when predicting/validating transitions, you"
-                      "probably will not get the behavior that you expect. Disable"
-                      "this exception if you dare.")
-            self.memory['top_buf'] = self.wrap_items([buf[-1] if len(buf) > 0 else self.zeros for buf in self.bufs])
-            self.memory['top_stack_1'] = self.wrap_items([stack[-1] if len(stack) > 0 else self.zeros for stack in self.stacks])
-            self.memory['top_stack_2'] = self.wrap_items([stack[-2] if len(stack) > 1 else self.zeros for stack in self.stacks])
+                # Prepare tracker input.
+                if self.debug and any(len(buf) < 1 or len(stack) for buf, stack in zip(self.bufs, self.stacks)):
+                    # To elaborate on this exception, when cropping examples it is possible
+                    # that your first 1 or 2 actions is a reduce action. It is unclear if this
+                    # is a bug in cropping or a bug in how we think about cropping. In the meantime,
+                    # turn on the truncate batch flag, and set the eval_seq_length very high.
+                    raise IndexError("Warning: You are probably trying to encode examples"
+                          "with cropped transitions. Although, this is a reasonable"
+                          "feature, when predicting/validating transitions, you"
+                          "probably will not get the behavior that you expect. Disable"
+                          "this exception if you dare.")
 
-            # Run if:
-            # A. We have a tracking component and,
-            # B. There is at least one transition that will not be skipped.
-            if hasattr(self, 'tracker') and sum(cant_skip) > 0:
+                with Profiler("wrap", cache=True):
+                    self.memory['top_buf'] = self.wrap_items([buf[-1] if len(buf) > 0 else self.zeros for buf in self.bufs])
+                    self.memory['top_stack_1'] = self.wrap_items([stack[-1] if len(stack) > 0 else self.zeros for stack in self.stacks])
+                    self.memory['top_stack_2'] = self.wrap_items([stack[-2] if len(stack) > 1 else self.zeros for stack in self.stacks])
 
-                # Get hidden output from the tracker. Used to predict transitions.
-                tracker_h, tracker_c = self.tracker(
-                    self.extract_h(self.memory['top_buf']),
-                    self.extract_h(self.memory['top_stack_1']),
-                    self.extract_h(self.memory['top_stack_2']))
+                # Run if:
+                # A. We have a tracking component and,
+                # B. There is at least one transition that will not be skipped.
+                if hasattr(self, 'tracker') and sum(cant_skip) > 0:
 
-                if hasattr(self, 'transition_net'):
-                    transition_inp = [tracker_h]
-                    if self.predict_use_cell:
-                        transition_inp += [tracker_c]
-                    transition_inp = torch.cat(transition_inp, 1)
-                    transition_output = self.transition_net(transition_inp)
+                    with Profiler("extract", cache=True):
+                        # Get hidden output from the tracker. Used to predict transitions.
+                        tracker_h, tracker_c = self.tracker(
+                            self.extract_h(self.memory['top_buf']),
+                            self.extract_h(self.memory['top_stack_1']),
+                            self.extract_h(self.memory['top_stack_2']))
 
-                if hasattr(self, 'transition_net') and run_internal_parser:
+                    with Profiler("transition_net", cache=True):
+                        if hasattr(self, 'transition_net'):
+                            transition_inp = [tracker_h]
+                            if self.predict_use_cell:
+                                transition_inp += [tracker_c]
+                            transition_inp = torch.cat(transition_inp, 1)
+                            transition_output = self.transition_net(transition_inp)
 
-                    # Predict Actions
-                    # ===============
+                    if hasattr(self, 'transition_net') and run_internal_parser:
 
-                    # Distribution of transitions use to calculate transition loss.
-                    self.memory["t_logits"] = F.log_softmax(transition_output)
+                        # Predict Actions
+                        # ===============
 
-                    # Given transitions.
-                    self.memory["t_given"] = transitions
+                        with Profiler("transition_net_predict", cache=True):
+                            # Distribution of transitions use to calculate transition loss.
+                            self.memory["t_logits"] = F.log_softmax(transition_output)
 
-                    # TODO: Mask before predicting. This should simplify things and reduce computation.
-                    # The downside is that in the Action Phase, need to be smarter about which stacks/bufs
-                    # are selected.
-                    transition_preds = self.predict_actions(transition_output)
+                            # Given transitions.
+                            self.memory["t_given"] = transitions
 
-                    # Constrain to valid actions
-                    # ==========================
+                            # TODO: Mask before predicting. This should simplify things and reduce computation.
+                            # The downside is that in the Action Phase, need to be smarter about which stacks/bufs
+                            # are selected.
+                            transition_preds = self.predict_actions(transition_output)
 
-                    validated_preds, invalid_mask = self.validate(transition_arr, transition_preds, self.stacks, self.bufs)
-                    if validate_transitions:
-                        transition_preds = validated_preds
+                        # Constrain to valid actions
+                        # ==========================
 
-                    # Keep track of which predictions have been valid.
-                    self.memory["t_valid_mask"] = np.logical_not(invalid_mask)
-                    invalid_count += invalid_mask
+                        with Profiler("validate", cache=True):
+                            validated_preds, invalid_mask = self.validate(transition_arr, transition_preds, self.stacks, self.bufs)
+                            if validate_transitions:
+                                transition_preds = validated_preds
 
-                    # If the given action is skip, then must skip.
-                    transition_preds[must_skip] = T_SKIP
+                        # Keep track of which predictions have been valid.
+                        self.memory["t_valid_mask"] = np.logical_not(invalid_mask)
+                        invalid_count += invalid_mask
 
-                    # Actual transition predictions. Used to measure transition accuracy.
-                    self.memory["t_preds"] = transition_preds
+                        # If the given action is skip, then must skip.
+                        transition_preds[must_skip] = T_SKIP
 
-                    # Binary mask of examples that have a transition.
-                    self.memory["t_mask"] = cant_skip
+                        # Actual transition predictions. Used to measure transition accuracy.
+                        self.memory["t_preds"] = transition_preds
 
-                    # If this FLAG is set, then use the predicted actions rather than the given.
-                    if use_internal_parser:
-                        transition_arr = transition_preds.tolist()
+                        # Binary mask of examples that have a transition.
+                        self.memory["t_mask"] = cant_skip
 
-            # Pre-Action Phase
-            # ================
+                        # If this FLAG is set, then use the predicted actions rather than the given.
+                        if use_internal_parser:
+                            transition_arr = transition_preds.tolist()
 
-            # For SHIFT
-            s_stacks, s_tops, s_trackings, s_idxs = [], [], [], []
+                # Pre-Action Phase
+                # ================
 
-            # For REDUCE
-            r_stacks, r_lefts, r_rights, r_trackings = [], [], [], []
+                with Profiler("pre_action", cache=True):
+                    # For SHIFT
+                    s_stacks, s_tops, s_trackings, s_idxs = [], [], [], []
 
-            batch = zip(transition_arr, self.bufs, self.stacks,
-                        self.tracker.states if hasattr(self, 'tracker') and self.tracker.h is not None
-                        else itertools.repeat(None))
+                    # For REDUCE
+                    r_stacks, r_bufs, r_trackings = [], [], []
 
-            for batch_idx, (transition, buf, stack, tracking) in enumerate(batch):
-                if transition == T_SHIFT: # shift
-                    self.t_shift(buf, stack, tracking, s_tops, s_trackings)
-                    s_idxs.append(batch_idx)
-                    s_stacks.append(stack)
-                elif transition == T_REDUCE: # reduce
-                    self.t_reduce(buf, stack, tracking, r_lefts, r_rights, r_trackings)
-                    r_stacks.append(stack)
-                elif transition == T_SKIP: # skip
-                    self.t_skip()
+                    with Profiler("zip_batch", cache=True):
+                        batch = zip(transition_arr, self.bufs, self.stacks)
+                        if hasattr(self, 'tracker') and self.tracker.h is not None:
+                            self.trackings = self.tracker.states
+                        else:
+                            self.trackings = [None] * sub_batch_size
 
-            # Action Phase
-            # ============
+                    with Profiler("loop", cache=True):
+                        for batch_idx, (transition, buf, stack) in enumerate(batch):
+                            if transition == T_SHIFT: # shift
+                                with Profiler("t_shift", cache=True):
+                                    s_tops.append(batch_idx)
+                                    s_trackings.append(batch_idx)
+                                    s_stacks.append(batch_idx)
+                                    s_idxs.append(batch_idx)
+                            elif transition == T_REDUCE: # reduce
+                                with Profiler("t_reduce", cache=True):
+                                    r_trackings.append(batch_idx)
+                                    r_stacks.append(batch_idx)
+                                    r_bufs.append(batch_idx)
+                            # elif transition == T_SKIP: # skip
+                            #     self.t_skip()
 
-            self.shift_phase(s_tops, s_trackings, s_stacks, s_idxs)
-            self.reduce_phase(r_lefts, r_rights, r_trackings, r_stacks)
-            self.reduce_phase_hook(r_lefts, r_rights, r_trackings, r_stacks)
+                # Action Phase
+                # ============
 
-            # Memory Phase
-            # ============
+                with Profiler("action", cache=True):
+                    with Profiler("shift", cache=True):
+                        self.shift_phase(s_tops, s_trackings, s_stacks, s_idxs)
+                    with Profiler("reduce", cache=True):
+                        self.reduce_phase(r_bufs, r_trackings, r_stacks)
+                    self.reduce_phase_hook(r_bufs, r_trackings, r_stacks)
 
-            # APPEND ALL MEMORIES. MASK LATER.
+                # Memory Phase
+                # ============
 
-            self.memories.append(self.memory)
+                with Profiler("memory", cache=True):
+                    # APPEND ALL MEMORIES. MASK LATER.
 
-            # Update number of reduces seen so far.
-            self.n_reduces += (np.array(transition_arr) == T_REDUCE)
+                    self.memories.append(self.memory)
 
-            # Update number of non-skip actions seen so far.
-            self.n_steps += (np.array(transition_arr) != T_SKIP)
+                    # Update number of reduces seen so far.
+                    self.n_reduces += (np.array(transition_arr) == T_REDUCE)
+
+                    # Update number of non-skip actions seen so far.
+                    self.n_steps += (np.array(transition_arr) != T_SKIP)
 
         # Loss Phase
         # ==========
 
-        if hasattr(self, 'tracker') and hasattr(self, 'transition_net'):
-            t_preds = np.concatenate([m['t_preds'] for m in self.memories if m.get('t_preds', None) is not None])
-            t_given = np.concatenate([m['t_given'] for m in self.memories if m.get('t_given', None) is not None])
-            t_mask = np.concatenate([m['t_mask'] for m in self.memories if m.get('t_mask', None) is not None])
-            t_logits = torch.cat([m['t_logits'] for m in self.memories if m.get('t_logits', None) is not None], 0)
+        with Profiler("loss"):
 
-            # We compute accuracy and loss after all transitions have complete,
-            # since examples can have different lengths when not using skips.
+            if hasattr(self, 'tracker') and hasattr(self, 'transition_net'):
+                t_preds = np.concatenate([m['t_preds'] for m in self.memories if m.get('t_preds', None) is not None])
+                t_given = np.concatenate([m['t_given'] for m in self.memories if m.get('t_given', None) is not None])
+                t_mask = np.concatenate([m['t_mask'] for m in self.memories if m.get('t_mask', None) is not None])
+                t_logits = torch.cat([m['t_logits'] for m in self.memories if m.get('t_logits', None) is not None], 0)
 
-            # Transition Accuracy.
-            n = t_mask.shape[0]
-            n_skips = n - t_mask.sum()
-            n_total = n - n_skips
-            n_correct = (t_preds == t_given).sum() - n_skips
-            transition_acc = n_correct / float(n_total)
+                # We compute accuracy and loss after all transitions have complete,
+                # since examples can have different lengths when not using skips.
 
-            # Transition Loss.
-            index = to_gpu(Variable(torch.from_numpy(np.arange(t_mask.shape[0])[t_mask])).long())
-            select_t_given = to_gpu(Variable(torch.from_numpy(t_given[t_mask]), volatile=not self.training).long())
-            select_t_logits = torch.index_select(t_logits, 0, index)
-            transition_loss = nn.NLLLoss()(select_t_logits, select_t_given) * self.transition_weight
+                # Transition Accuracy.
+                n = t_mask.shape[0]
+                n_skips = n - t_mask.sum()
+                n_total = n - n_skips
+                n_correct = (t_preds == t_given).sum() - n_skips
+                transition_acc = n_correct / float(n_total)
 
-            self.n_invalid = (invalid_count > 0).sum()
-            self.invalid = self.n_invalid / float(batch_size)
+                # Transition Loss.
+                index = to_gpu(Variable(torch.from_numpy(np.arange(t_mask.shape[0])[t_mask])).long())
+                select_t_given = to_gpu(Variable(torch.from_numpy(t_given[t_mask]), volatile=not self.training).long())
+                select_t_logits = torch.index_select(t_logits, 0, index)
+                transition_loss = nn.NLLLoss()(select_t_logits, select_t_given) * self.transition_weight
 
-        self.loss_phase_hook()
+                self.n_invalid = (invalid_count > 0).sum()
+                self.invalid = self.n_invalid / float(batch_size)
+
+            self.loss_phase_hook()
 
         if self.debug:
             assert all(len(stack) == 3 for stack in self.stacks), \
@@ -581,37 +609,54 @@ class BaseModel(nn.Module):
 
     def forward(self, sentences, transitions, y_batch=None,
                  use_internal_parser=False, validate_transitions=True):
-        example = self.unwrap(sentences, transitions)
+        with Profiler("buffer"):
+            example = self.unwrap(sentences, transitions)
 
-        b, l = example.tokens.size()[:2]
+            b, l = example.tokens.size()[:2]
 
-        embeds = self.embed(example.tokens)
-        embeds = self.reshape_input(embeds, b, l)
-        embeds = self.encode(embeds)
-        embeds = self.reshape_context(embeds, b, l)
-        self.forward_hook(embeds, b, l)
-        embeds = F.dropout(embeds, self.embedding_dropout_rate, training=self.training)
-        embeds = torch.chunk(to_cpu(embeds), b, 0)
+            with Profiler("embed"):
+                embeds = self.embed(example.tokens)
+            with Profiler("reshape_input"):
+                embeds = self.reshape_input(embeds, b, l)
+            with Profiler("encode"):
+                embeds = self.encode(embeds)
+            with Profiler("reshape_context"):
+                embeds = self.reshape_context(embeds, b, l)
+            self.forward_hook(embeds, b, l)
+            with Profiler("dropout"):
+                embeds = F.dropout(embeds, self.embedding_dropout_rate, training=self.training)
 
-        # Make Buffers
-        embeds = [torch.chunk(x, l, 0) for x in embeds]
-        buffers = [list(reversed(x)) for x in embeds]
+            # Make Buffers
+            with Profiler("buffers"):
+                with Profiler("chunk"):
+                    ee = torch.chunk(embeds, b * l, 0)
+                with Profiler("reverse"):
+                    ee = ee[::-1]
+                with Profiler("make list"):
+                    bb = []
+                    for ii in xrange(b):
+                        ex = list(ee[ii*l:(ii+1)*l])
+                        bb.append(ex)
+                with Profiler("reverse"):
+                    buffers = bb[::-1]
 
         example.bufs = buffers
 
-        h, transition_acc, transition_loss = self.run_spinn(example, use_internal_parser, validate_transitions)
+        with Profiler("spinn"):
+            h, transition_acc, transition_loss = self.run_spinn(example, use_internal_parser, validate_transitions)
 
         self.spinn_outp = h
 
         self.transition_acc = transition_acc
         self.transition_loss = transition_loss
 
-        # Build features
-        features = self.build_features(h)
+        with Profiler("mlp"):
+            # Build features
+            features = self.build_features(h)
 
-        output = self.mlp(features)
+            output = self.mlp(features)
 
-        self.output_hook(output, sentences, transitions, y_batch, embeds)
+        self.output_hook(output, sentences, transitions, y_batch, None)
 
         return output
 
