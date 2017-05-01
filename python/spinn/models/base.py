@@ -301,7 +301,7 @@ def get_flags():
         "Used for dropout in the semantic task classifier.")
 
     # Optimization settings.
-    gflags.DEFINE_enum("optimizer_type", "Adam", ["Adam", "RMSprop"], "")
+    gflags.DEFINE_enum("optimizer_type", "Adam", ["Adam", "RMSprop", "SGD"], "")
     gflags.DEFINE_integer("training_steps", 500000, "Stop training after this point.")
     gflags.DEFINE_integer("batch_size", 32, "SGD minibatch size.")
     gflags.DEFINE_float("learning_rate", 0.001, "Used in optimizer.")
@@ -463,6 +463,8 @@ def init_model(FLAGS, logger, initial_embeddings, vocab_size, num_classes, data_
         optimizer = optim.Adam(model.parameters(), lr=FLAGS.learning_rate, betas=(0.9, 0.999), eps=1e-08)
     elif FLAGS.optimizer_type == "RMSprop":
         optimizer = optim.RMSprop(model.parameters(), lr=FLAGS.learning_rate, eps=1e-08)
+    elif FLAGS.optimizer_type == "SGD":
+        optimizer = optim.SGD(model.parameters(), lr=FLAGS.learning_rate)
     else:
         raise NotImplementedError
 
