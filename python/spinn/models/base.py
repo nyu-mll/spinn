@@ -275,6 +275,10 @@ def get_flags():
     gflags.DEFINE_boolean("encode_bidirectional", False, "Encode in both directions.")
     gflags.DEFINE_integer("encode_num_layers", 1, "RNN layers in encoding net.")
 
+    # Encode settings.
+    gflags.DEFINE_boolean("use_attention", False, "Attend over nodes/leaves in the binary parse tree.")
+    gflags.DEFINE_integer("attention_dim", 256, "Hidden state for attention.")
+
     # RL settings.
     gflags.DEFINE_float("rl_mu", 0.1, "Use in exponential moving average baseline.")
     gflags.DEFINE_enum("rl_baseline", "ema", ["ema", "pass", "greedy", "value"],
@@ -334,14 +338,13 @@ def get_flags():
 
 
 def flag_defaults(FLAGS, load_log_flags=False):
-    if load_log_flags:
-        if FLAGS.load_log_path and os.path.exists(log_path(FLAGS, load=True)):
-            log_flags = parse_flags(log_path(FLAGS, load=True))
-            for k in log_flags.keys():
-                setattr(FLAGS, k, log_flags[k])
+    if FLAGS.load_log_path and os.path.exists(log_path(FLAGS, load=True)):
+        log_flags = parse_flags(log_path(FLAGS, load=True))
+        for k in log_flags.keys():
+            setattr(FLAGS, k, log_flags[k])
 
-            # Optionally override flags from log file.
-            FLAGS(sys.argv)
+        # Optionally override flags from log file.
+        FLAGS(sys.argv)
 
     if not FLAGS.experiment_name:
         timestamp = str(int(time.time()))
