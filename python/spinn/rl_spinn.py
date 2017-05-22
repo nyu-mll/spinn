@@ -64,31 +64,29 @@ class RLSPINN(SPINN):
     eplison = 1.0
 
     def predict_actions(self, transition_output):
-        transition_dist = F.softmax(
-            transition_output / max(self.temperature, 1e-8)).data.cpu()
+        transition_dist = F.sigmoid(
+                transition_output / max(self.temperature, 1e-8)).data.cpu()
 
         if self.training:
             if self.catalan:
                 # Interpolate between the uniform random distrubition of binary trees
-                # and the distribution from the transition_net's softmax.
-                p_temp = transition_dist[:, 0]
-                p = F.softmax(transition_output).data[:, 0].cpu()
+                # and the distribution from the transition_net.
+                p_temp = transition_dist
+                p = F.sigmoid(transition_output).data.cpu()
                 original = torch.zeros(p.size()).fill_(0.5)
                 desired = [self.shift_probabilities.prob(n_red, n_step, n_tok)
                            for n_red, n_step, n_tok in zip(self.n_reduces, self.n_steps, self.n_tokens)]
                 desired = torch.FloatTensor(desired)
                 new_p = interpolate(p_temp, p, original, desired)
                 new_p = new_p.unsqueeze(1)
-                transition_dist = torch.cat([new_p, 1 - new_p], 1)
+                transition_dist = new_p
 
-            shift_probs = transition_dist[:, 0].numpy()
-            transition_preds = (np.random.rand(
-                *shift_probs.shape) > shift_probs).astype('int32')
+            shift_probs = transition_dist.numpy()
+            transition_preds = (np.random.rand(*shift_probs.shape) > shift_probs).astype('int32')
         else:
             # Greedy prediction
-            shift_probs = transition_dist[:, 0]
-            transition_preds = torch.round(
-                1 - shift_probs).numpy().astype('int32')
+            shift_probs = transition_dist
+            transition_preds = torch.round(1 - shift_probs).numpy().astype('int32')
         return transition_preds
 
 
@@ -227,7 +225,7 @@ class BaseModel(_BaseModel):
         """
         t_preds  = 200...111 (flattened predictions from sub_batches 1...N)
         t_mask   = 011...111 (binary mask, selecting non-skips only)
-        t_logprobs = (B*N)xC (tensor of sub_batch_size * sub_num_batches x transition classes)
+        t_probs = (B*N)xC (tensor of sub_batch_size * sub_num_batches x transition classes)
         a_index  = 011...(N-1)(N-1)(N-1) (masked sub_batch_indices for each transition)
         t_index  = 013...(B*N-3)(B*N-2)(B*N-1) (masked indices across all sub_batches)
         """
@@ -235,14 +233,10 @@ class BaseModel(_BaseModel):
         # TODO: Many of these ops are on the cpu. Might be worth shifting to
         # GPU.
 
-        t_preds = np.concatenate([m['t_preds']
-                                  for m in self.spinn.memories if 't_preds' in m])
-        t_mask = np.concatenate([m['t_mask']
-                                 for m in self.spinn.memories if 't_mask' in m])
-        t_valid_mask = np.concatenate(
-            [m['t_valid_mask'] for m in self.spinn.memories if 't_mask' in m])
-        t_logprobs = torch.cat(
-            [m['t_logprobs'] for m in self.spinn.memories if 't_logprobs' in m], 0)
+        t_preds = np.concatenate([m['t_preds'] for m in self.spinn.memories if 't_preds' in m])
+        t_mask = np.concatenate([m['t_mask'] for m in self.spinn.memories if 't_mask' in m])
+        t_valid_mask = np.concatenate([m['t_valid_mask'] for m in self.spinn.memories if 't_mask' in m])
+        t_probs = torch.cat([m['t_probs'] for m in self.spinn.memories if 't_probs' in m], 0)
 
         if self.rl_valid:
             t_mask = np.logical_and(t_mask, t_valid_mask)
@@ -274,17 +268,17 @@ class BaseModel(_BaseModel):
         advantage = torch.index_select(advantage, 0, a_index)
 
         # Filter logits.
-        t_logprobs = torch.index_select(t_logprobs, 0, t_index)
+        t_probs = torch.index_select(t_probs, 0, t_index)
 
         actions = to_gpu(Variable(torch.from_numpy(
             t_preds[t_mask]).long().view(-1, 1), volatile=not self.training))
-        log_p_action = torch.gather(t_logprobs, 1, actions)
+        log_p_action = torch.log((t_probs - actions.float()).abs() + 1e-8)
 
         # source: https://github.com/miyosuda/async_deep_reinforce/issues/1
         if self.rl_entropy:
-            # TODO: Taking exp of a log is not the best way to get the initial
-            # probability...
-            entropy = - (t_logprobs * torch.exp(t_logprobs)).sum(1)
+            # Need to use the positive and negatives probabilities.
+            entropy = - (t_probs * torch.log(t_probs + 1e-8)).sum(1) - \
+                        ((1 - t_probs) * torch.log((1 - t_probs) + 1e-8)).sum(1)
         else:
             entropy = 0.0
 
