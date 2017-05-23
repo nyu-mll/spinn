@@ -65,7 +65,7 @@ class RLSPINN(SPINN):
 
     def predict_actions(self, transition_output):
         transition_dist = F.sigmoid(
-                transition_output / max(self.temperature, 1e-8)).data.cpu()
+            transition_output / max(self.temperature, 1e-8)).data.cpu()
 
         if self.training:
             if self.catalan:
@@ -82,11 +82,13 @@ class RLSPINN(SPINN):
                 transition_dist = new_p
 
             shift_probs = transition_dist.numpy()
-            transition_preds = (np.random.rand(*shift_probs.shape) > shift_probs).astype('int32')
+            transition_preds = (np.random.rand(
+                *shift_probs.shape) > shift_probs).astype('int32')
         else:
             # Greedy prediction
             shift_probs = transition_dist
-            transition_preds = torch.round(1 - shift_probs).numpy().astype('int32')
+            transition_preds = torch.round(
+                1 - shift_probs).numpy().astype('int32')
         return transition_preds
 
 
@@ -233,10 +235,14 @@ class BaseModel(_BaseModel):
         # TODO: Many of these ops are on the cpu. Might be worth shifting to
         # GPU.
 
-        t_preds = np.concatenate([m['t_preds'] for m in self.spinn.memories if 't_preds' in m])
-        t_mask = np.concatenate([m['t_mask'] for m in self.spinn.memories if 't_mask' in m])
-        t_valid_mask = np.concatenate([m['t_valid_mask'] for m in self.spinn.memories if 't_mask' in m])
-        t_probs = torch.cat([m['t_probs'] for m in self.spinn.memories if 't_probs' in m], 0)
+        t_preds = np.concatenate([m['t_preds']
+                                  for m in self.spinn.memories if 't_preds' in m])
+        t_mask = np.concatenate([m['t_mask']
+                                 for m in self.spinn.memories if 't_mask' in m])
+        t_valid_mask = np.concatenate(
+            [m['t_valid_mask'] for m in self.spinn.memories if 't_mask' in m])
+        t_probs = torch.cat([m['t_probs']
+                             for m in self.spinn.memories if 't_probs' in m], 0)
 
         if self.rl_valid:
             t_mask = np.logical_and(t_mask, t_valid_mask)
