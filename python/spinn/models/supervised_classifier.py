@@ -245,7 +245,10 @@ def train_loop(FLAGS, data_manager, model, optimizer, trainer,
             progress_bar.finish()
 
             A.add('total_loss', total_loss.data[0])
-            A.add('auxiliary_loss', aux_loss.data[0])
+            if isinstance(aux_loss, Variable):
+                A.add('auxiliary_loss', aux_loss.data[0])
+            else:
+                A.add('auxiliary_loss', 0.)
             A.add('xent_loss', xent_loss.data[0])
             A.add('l2_loss', l2_loss.data[0])
             stats_args = train_stats(model, optimizer, A, step)
