@@ -140,9 +140,7 @@ class SPINN(nn.Module):
                     tinp_size = self.tracker.state_size * 2 if predict_use_cell else self.tracker.state_size
                 else:
                     tinp_size = self.tracker.state_size
-                self.transition_net = nn.Linear(tinp_size, 2)
-
-        self.choices = np.array([T_SHIFT, T_REDUCE], dtype=np.int32)
+                self.transition_net = nn.Linear(tinp_size, 1)
 
         self.shift_probabilities = ShiftProbabilities()
 
@@ -202,8 +200,6 @@ class SPINN(nn.Module):
         must_skip = _transitions == T_SKIP
 
         # Fixup predicted skips.
-        if len(self.choices) > 2:
-            raise NotImplementedError("Can only validate actions for 2 choices right now.")
 
         buf_lens = [len(buf) - buf_adjust for buf in bufs]
         stack_lens = [len(stack) - stack_adjust for stack in stacks]
@@ -226,9 +222,8 @@ class SPINN(nn.Module):
         return _preds, _invalid
 
     def predict_actions(self, transition_output):
-        transition_dist = F.log_softmax(transition_output)
-        transition_dist = transition_dist.data.cpu().numpy()
-        transition_preds = transition_dist.argmax(axis=1)
+        transition_dist = F.sigmoid(transition_output).data
+        transition_preds = torch.round(1 - transition_dist).cpu().numpy().astype('int32')
         return transition_preds
 
     def get_transitions_per_example(self, style="preds"):
@@ -241,16 +236,14 @@ class SPINN(nn.Module):
 
         t_preds = np.concatenate([m['t_preds'] for m in self.memories if 't_preds' in m])
         t_preds = torch.from_numpy(t_preds).long()
-        t_logprobs = torch.cat([m['t_logprobs']
-                                for m in self.memories if 't_logprobs' in m], 0).data.cpu()
-        t_logprobs = torch.cat([t_logprobs, torch.zeros(t_logprobs.size(0), 1)], 1)
-        t_strength = torch.gather(t_logprobs, 1, t_preds.view(-1, 1))
+        t_probs = torch.cat([m['t_probs'] for m in self.memories if 't_probs' in m], 0).data.cpu()
+        t_strength = (t_probs.view(-1) - t_preds.float().view(-1)).abs()
 
         _transitions = [m[source].reshape(1, -1)
                         for m in self.memories if m.get(source, None) is not None]
         transitions = np.concatenate(_transitions).T
 
-        t_strength = torch.exp(t_strength.view(*list(reversed(transitions.shape))).t())
+        t_strength = t_strength.view(*list(reversed(transitions.shape))).t()
 
         skip_mask = (torch.from_numpy(transitions) == T_SKIP).byte()
         t_strength[skip_mask] = 0.
@@ -372,7 +365,7 @@ class SPINN(nn.Module):
                     # ===============
 
                     # Distribution of transitions use to calculate transition loss.
-                    self.memory["t_logprobs"] = F.log_softmax(transition_output)
+                    self.memory["t_probs"] = F.sigmoid(transition_output)
 
                     # Given transitions.
                     self.memory["t_given"] = transitions
@@ -380,7 +373,7 @@ class SPINN(nn.Module):
                     # TODO: Mask before predicting. This should simplify things and reduce computation.
                     # The downside is that in the Action Phase, need to be smarter about which stacks/bufs
                     # are selected.
-                    transition_preds = self.predict_actions(transition_output)
+                    transition_preds = self.predict_actions(transition_output).reshape(-1)
 
                     # Constrain to valid actions
                     # ==========================
@@ -458,7 +451,7 @@ class SPINN(nn.Module):
             t_preds = np.concatenate([m['t_preds'] for m in self.memories if 't_preds' in m])
             t_given = np.concatenate([m['t_given'] for m in self.memories if 't_given' in m])
             t_mask = np.concatenate([m['t_mask'] for m in self.memories if 't_mask' in m])
-            t_logprobs = torch.cat([m['t_logprobs'] for m in self.memories if 't_logprobs' in m], 0)
+            t_probs = torch.cat([m['t_probs'] for m in self.memories if 't_probs' in m], 0)
 
             # We compute accuracy and loss after all transitions have complete,
             # since examples can have different lengths when not using skips.
@@ -474,8 +467,12 @@ class SPINN(nn.Module):
             index = to_gpu(Variable(torch.from_numpy(np.arange(t_mask.shape[0])[t_mask])).long())
             select_t_given = to_gpu(Variable(torch.from_numpy(
                 t_given[t_mask]), volatile=not self.training).long())
-            select_t_logprobs = torch.index_select(t_logprobs, 0, index)
-            transition_loss = nn.NLLLoss()(select_t_logprobs, select_t_given) * self.transition_weight
+            select_t_probs = torch.index_select(t_probs, 0, index)
+
+            # Flip bits in the target because target is 0=SHIFT 1=REDUCE, but t_probs are probability
+            # of shifting.
+            t_target = 1 - select_t_given.float()
+            transition_loss = nn.BCELoss()(select_t_probs, t_target) * self.transition_weight
 
             self.n_invalid = (invalid_count > 0).sum()
             self.invalid = self.n_invalid / float(batch_size)
